@@ -3,3 +3,4 @@
 **/dist
 **/.env
 **/ca.pem
+!server/collector/ca.pem
