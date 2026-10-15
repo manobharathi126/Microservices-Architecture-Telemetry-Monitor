@@ -10,7 +10,11 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const mysql = require('mysql2/promise');
 
 const caPath = path.join(__dirname, 'ca.pem');
-const sslConfig = fs.existsSync(caPath) ? { ca: fs.readFileSync(caPath), rejectUnauthorized: false } : undefined;
+
+const sslConfig = {
+  minVersion: 'TLSv1.2',
+  rejectUnauthorized: true,
+};
 
 let pool;
 try {
