@@ -48,6 +48,9 @@ DB_PASSWORD=${{MySQL.MYSQLPASSWORD}}
 DB_NAME=${{MySQL.MYSQLDATABASE}}
 ```
 
+Set `READ_ONLY_DEMO=true` on the collector service so visitors cannot add
+arbitrary URLs for the backend to poll.
+
 In the collector service's **Settings → Networking**, generate a public
 domain. Use the generated domain in the next step, with the `wss://` scheme.
 Railway supplies `PORT` to the collector automatically.
@@ -67,6 +70,10 @@ replacing `Collector` with the collector service's name:
 ```text
 VITE_COLLECTOR_WS_URL=wss://${{Collector.RAILWAY_PUBLIC_DOMAIN}}
 ```
+
+The dashboard image defaults to read-only mode for shared demos. To enable the
+service-adding controls, set the dashboard build variable
+`VITE_READ_ONLY_DEMO=false` before deploying.
 
 Generate a public domain for the dashboard service. The `VITE_` variable is
 embedded in the dashboard at build time, so redeploy the dashboard after

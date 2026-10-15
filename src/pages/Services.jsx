@@ -15,6 +15,7 @@ import '../css/Services.css';
  * the collector starts reporting readings for them.
  */
 const Services = () => {
+  const readOnlyDemo = import.meta.env.VITE_READ_ONLY_DEMO === 'true';
   const { services: servicesData, connectionStatus, addService, addServiceStatus } = useTelemetry();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
@@ -114,7 +115,7 @@ const Services = () => {
           />
         </div>
 
-        <button
+        {!readOnlyDemo && <button
           onClick={() => setShowAddForm((v) => !v)}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
@@ -127,13 +128,13 @@ const Services = () => {
         >
           {showAddForm ? <X size={14} /> : <Plus size={14} />}
           {showAddForm ? 'Cancel' : 'Add Service'}
-        </button>
+        </button>}
       </div>
 
       {/* Add Service form — sends a live message to the collector over
           the existing WebSocket connection. No backend restart needed;
           the new service shows up in the next poll cycle (~3s). */}
-      {showAddForm && (
+      {!readOnlyDemo && showAddForm && (
         <form
           onSubmit={handleAddService}
           style={{

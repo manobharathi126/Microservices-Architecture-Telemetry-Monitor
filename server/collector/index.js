@@ -156,6 +156,10 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.kind === 'add_service') {
+      if (process.env.READ_ONLY_DEMO === 'true') {
+        ws.send(JSON.stringify({ kind: 'add_service_result', ok: false, error: 'This shared demo is read-only.' }));
+        return;
+      }
       const { name, url, serviceKind } = msg;
       if (!name || !url) return;
 
