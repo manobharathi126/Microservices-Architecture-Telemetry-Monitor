@@ -11,9 +11,15 @@ const mysql = require('mysql2/promise');
 
 const caPath = path.join(__dirname, 'ca.pem');
 
+if (!fs.existsSync(caPath)) {
+  throw new Error('TiDB CA certificate not found: ' + caPath);
+}
+
 const sslConfig = {
+  ca: fs.readFileSync(caPath),
   minVersion: 'TLSv1.2',
   rejectUnauthorized: true,
+  servername: process.env.DB_HOST,
 };
 
 let pool;
