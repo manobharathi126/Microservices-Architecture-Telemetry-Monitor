@@ -52,11 +52,19 @@ async function ensureDb() {
     console.log('[collector] Connected to MySQL database.');
     return true;
   } catch (err) {
-    useMemoryStore = true;
-    console.warn(`[collector] MySQL database is unreachable (${err.code || err.message}).`);
-    console.warn('[collector] Running in in-memory mode so live telemetry data works uninterrupted.');
-    return false;
-  }
+  useMemoryStore = true;
+
+  console.error('[collector] MySQL connection failed!');
+  console.error('Error code:', err.code);
+  console.error('Error message:', err.message);
+  console.error('SQL state:', err.sqlState);
+
+  console.warn(
+    '[collector] Running in in-memory mode so live telemetry data works uninterrupted.'
+  );
+
+  return false;
+}
 }
 
 // --- Services ---
