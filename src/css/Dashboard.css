@@ -97,7 +97,12 @@
 /* Stats Grid */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* Explicit 4 columns (not auto-fill) — with 8 stat cards this gives
+     exactly 2 full, even rows. auto-fill computed column count purely
+     from container width, which happened to produce 5 columns — leaving
+     the second row with only 3 of 5 tracks filled and visible dead
+     space on the right. */
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -340,10 +345,15 @@
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 900px) {
   .stats-grid {
+    /* 8 cards ÷ 2 columns = perfectly even 4 rows — avoiding 3 columns
+       here on purpose, since 8 ÷ 3 leaves an uneven last row again. */
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+@media (max-width: 600px) {
   .welcome-text h1 {
     font-size: 1.2rem;
   }

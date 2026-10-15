@@ -144,6 +144,7 @@
 .span-bar.success { background: rgba(16, 185, 129, 0.6); }
 .span-bar.error { background: rgba(239, 68, 68, 0.7); }
 .span-bar.slow { background: rgba(245, 158, 11, 0.6); }
+.span-bar.unknown { background: rgba(148, 163, 184, 0.5); }
 
 .span-duration {
   font-size: 0.72rem;

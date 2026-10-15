@@ -69,6 +69,47 @@ export const RequestTrendChart = ({ data }) => (
 // ============================================================
 // CPU Trend Multi-Line Chart
 // ============================================================
+// ============================================================
+// Latency Trend Chart — dynamic multi-line chart
+//
+// Unlike CpuTrendChart below (which hardcodes 4 fixed service keys:
+// gateway/auth/order/inventory), this chart doesn't know service names
+// in advance — real monitored services (GitHub, PyPI, etc.) aren't
+// fixed at build time. So it reads whatever keys exist on each data
+// point (other than "time") and draws one line per key automatically.
+// ============================================================
+const LINE_COLOR_PALETTE = ['#6366f1', '#10b981', '#f59e0b', '#06b6d4', '#ec4899', '#8b5cf6'];
+
+export const LatencyTrendChart = ({ data }) => {
+  const seriesKeys = data && data.length > 0
+    ? Object.keys(data[0]).filter((key) => key !== 'time')
+    : [];
+
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+        <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit="ms" />
+        <Tooltip content={<CustomTooltip />} />
+        <Legend wrapperStyle={{ fontSize: '0.75rem', color: 'var(--text-muted)' }} />
+        {seriesKeys.map((key, i) => (
+          <Line
+            key={key}
+            type="monotone"
+            dataKey={key}
+            name={key}
+            stroke={LINE_COLOR_PALETTE[i % LINE_COLOR_PALETTE.length]}
+            strokeWidth={2}
+            dot={false}
+            connectNulls
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+};
+
 export const CpuTrendChart = ({ data }) => (
   <ResponsiveContainer width="100%" height={220}>
     <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
@@ -88,7 +129,7 @@ export const CpuTrendChart = ({ data }) => (
 // ============================================================
 // Memory Trend Area Chart
 // ============================================================
-export const MemoryTrendChart = ({ data }) => (
+export const MemoryTrendChart = ({ data, unit = '%' }) => (
   <ResponsiveContainer width="100%" height={220}>
     <AreaChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
       <defs>
@@ -99,9 +140,9 @@ export const MemoryTrendChart = ({ data }) => (
       </defs>
       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
       <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
-      <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit="%" />
+      <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit={unit} />
       <Tooltip content={<CustomTooltip />} />
-      <Area type="monotone" dataKey="usage" name="Memory %" stroke="#8b5cf6" strokeWidth={2} fill="url(#gradMemory)" dot={false} activeDot={{ r: 4 }} />
+      <Area type="monotone" dataKey="usage" name={`Memory ${unit}`} stroke="#8b5cf6" strokeWidth={2} fill="url(#gradMemory)" dot={false} activeDot={{ r: 4 }} />
     </AreaChart>
   </ResponsiveContainer>
 );
@@ -132,7 +173,7 @@ export const AvailabilityChart = ({ data }) => (
     <BarChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 40 }} barSize={18}>
       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
       <XAxis dataKey="name" tick={{ fill: 'var(--text-muted)', fontSize: 9 }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" interval={0} />
-      <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} domain={[85, 100]} unit="%" />
+      <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} unit="%" />
       <Tooltip content={<CustomTooltip />} />
       <Bar dataKey="value" name="Availability" radius={[4, 4, 0, 0]}>
         {data.map((entry, index) => (

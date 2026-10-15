@@ -62,6 +62,7 @@
 .service-card.healthy::before { background: var(--gradient-green); }
 .service-card.warning::before { background: var(--gradient-orange); }
 .service-card.down::before { background: var(--gradient-red); }
+.service-card.unknown::before { background: var(--gradient-gray); }
 
 .service-card:hover {
   transform: translateY(-4px);

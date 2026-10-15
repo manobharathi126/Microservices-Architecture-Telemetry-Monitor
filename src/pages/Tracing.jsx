@@ -1,9 +1,9 @@
 // ============================================================
 // Distributed Tracing Page
 // ============================================================
-import { useState, useEffect } from 'react';
-import { ChevronDown, GitBranch, Search } from 'lucide-react';
-import { tracesData } from '../data/dummyData';
+import { useState } from 'react';
+import { ChevronDown, GitBranch, Search, WifiOff } from 'lucide-react';
+import { useTelemetry } from '../hooks/useTelemetry';
 import '../css/Pages.css';
 
 /**
@@ -18,12 +18,14 @@ const TraceCard = ({ trace, index }) => {
   const getBarColor = (status) => {
     if (status === 'Error') return 'error';
     if (status === 'Slow') return 'slow';
+    if (status === 'Unknown') return 'unknown';
     return 'success';
   };
 
   const getStatusStyle = (status) => {
     if (status === 'Error') return 'badge-error';
     if (status === 'Slow') return 'badge-warning';
+    if (status === 'Unknown') return 'badge-unknown';
     return 'badge-success';
   };
 
@@ -120,17 +122,17 @@ const TraceCard = ({ trace, index }) => {
 };
 
 /**
- * Distributed Tracing page — shows all request traces
+ * Distributed Tracing page — shows real traces of the collector's own
+ * poll cycles. Each "trace" is one poll cycle; each "span" is one
+ * service call within it, with genuine measured start offsets and
+ * durations (calls are sequential, so timing is real, not fabricated).
  */
 const Tracing = () => {
-  const [loading, setLoading] = useState(true);
+  const { traces: tracesData, connectionStatus } = useTelemetry();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 800);
-    return () => clearTimeout(t);
-  }, []);
+  const loading = connectionStatus === 'connecting' && tracesData.length === 0;
 
   const filtered = tracesData.filter((t) => {
     const matchSearch = t.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -144,7 +146,15 @@ const Tracing = () => {
       <div className="page-header">
         <div>
           <h2 className="page-title">Distributed Tracing</h2>
-          <p className="page-subtitle">End-to-end request traces across all microservices</p>
+          <p className="page-subtitle">
+            Real spans across each poll cycle's service calls
+            {connectionStatus !== 'connected' && (
+              <span style={{ color: '#f59e0b', marginLeft: 8 }}>
+                <WifiOff size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                collector {connectionStatus}
+              </span>
+            )}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {['All', 'Success', 'Error', 'Slow'].map(s => (
@@ -184,7 +194,7 @@ const Tracing = () => {
           { label: 'Successful', value: tracesData.filter(t => t.status === 'Success').length, color: 'var(--status-healthy)' },
           { label: 'Errors', value: tracesData.filter(t => t.status === 'Error').length, color: 'var(--status-error)' },
           { label: 'Slow', value: tracesData.filter(t => t.status === 'Slow').length, color: 'var(--status-warning)' },
-          { label: 'Avg Duration', value: `${Math.round(tracesData.reduce((a, b) => a + b.duration, 0) / tracesData.length)}ms`, color: 'var(--text-muted)' },
+          { label: 'Avg Duration', value: tracesData.length ? `${Math.round(tracesData.reduce((a, b) => a + b.duration, 0) / tracesData.length)}ms` : '—', color: 'var(--text-muted)' },
         ].map((stat, i) => (
           <div key={i} style={{
             padding: '8px 16px',
@@ -205,6 +215,15 @@ const Tracing = () => {
           {Array(4).fill(null).map((_, i) => (
             <div key={i} className="skeleton" style={{ height: 72, borderRadius: 'var(--radius-lg)' }} />
           ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-state-icon">
+            <GitBranch size={28} />
+          </div>
+          <p className="empty-state-text">
+            {tracesData.length === 0 ? 'Waiting for the first trace...' : 'No traces match your search criteria'}
+          </p>
         </div>
       ) : (
         <div className="traces-list">

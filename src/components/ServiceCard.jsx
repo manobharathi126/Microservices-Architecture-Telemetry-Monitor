@@ -11,6 +11,10 @@ import '../css/Services.css';
  */
 const ServiceCard = ({ service, index = 0 }) => {
   const statusClass = service.status.toLowerCase();
+  // Real (external) services don't report CPU/memory — we can't
+  // observe another site's internals, so we only show what we
+  // genuinely measured (latency, HTTP status).
+  const isReal = service.type === 'real';
 
   const getUptimeColor = (uptime) => {
     if (uptime >= 99) return 'healthy';
@@ -33,8 +37,26 @@ const ServiceCard = ({ service, index = 0 }) => {
       {/* Header */}
       <div className="service-card-header">
         <div>
-          <div className="service-card-name">{service.name}</div>
-          <div className="service-card-host">{service.host}:{service.port}</div>
+          <div className="service-card-name">
+            {service.name}
+            <span
+              style={{
+                marginLeft: 8,
+                fontSize: '0.65rem',
+                padding: '2px 6px',
+                borderRadius: 4,
+                fontWeight: 700,
+                letterSpacing: '0.03em',
+                background: isReal ? 'rgba(59,130,246,0.15)' : 'rgba(168,85,247,0.15)',
+                color: isReal ? '#60a5fa' : '#c084fc',
+              }}
+            >
+              {isReal ? 'REAL' : 'SIMULATED'}
+            </span>
+          </div>
+          <div className="service-card-host">
+            {service.host ? `${service.host}:${service.port}` : (isReal ? 'external service' : '—')}
+          </div>
         </div>
         <span className={`badge badge-${statusClass}`}>
           {service.status}
@@ -43,61 +65,72 @@ const ServiceCard = ({ service, index = 0 }) => {
 
       {/* Metrics Grid */}
       <div className="service-card-metrics">
-        <div className="service-metric">
-          <span className="service-metric-label">CPU</span>
-          <div>
-            <span className={`service-metric-value ${getValueColor(service.cpu)}`}>
-              {service.cpu}%
-            </span>
-            <div className="progress-bar" style={{ marginTop: 4 }}>
-              <div
-                className={`progress-fill ${service.cpu > 80 ? 'error' : service.cpu > 60 ? 'warning' : 'healthy'}`}
-                style={{ width: `${service.cpu}%` }}
-              />
+        {/* CPU/Memory only exist for simulated services — for real
+            services we genuinely have no way to measure this, so we
+            omit the bars entirely rather than showing a fake 0%. */}
+        {!isReal && (
+          <>
+            <div className="service-metric">
+              <span className="service-metric-label">CPU</span>
+              <div>
+                <span className={`service-metric-value ${getValueColor(service.cpu)}`}>
+                  {service.cpu != null ? `${service.cpu}%` : '—'}
+                </span>
+                {service.cpu != null && (
+                  <div className="progress-bar" style={{ marginTop: 4 }}>
+                    <div
+                      className={`progress-fill ${service.cpu > 80 ? 'error' : service.cpu > 60 ? 'warning' : 'healthy'}`}
+                      style={{ width: `${service.cpu}%` }}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </div>
+
+            <div className="service-metric">
+              <span className="service-metric-label">Memory</span>
+              <div>
+                <span className="service-metric-value">
+                  {service.memory != null ? `${Math.round(service.memory)}MB` : '—'}
+                </span>
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="service-metric">
-          <span className="service-metric-label">Memory</span>
-          <div>
-            <span className={`service-metric-value ${getValueColor(service.memory)}`}>
-              {service.memory}%
-            </span>
-            <div className="progress-bar" style={{ marginTop: 4 }}>
-              <div
-                className={`progress-fill ${service.memory > 80 ? 'error' : service.memory > 60 ? 'warning' : 'healthy'}`}
-                style={{ width: `${service.memory}%` }}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="service-metric">
-          <span className="service-metric-label">Requests</span>
+          <span className="service-metric-label">
+            {isReal ? 'HTTP Status' : 'Requests'}
+          </span>
           <span className="service-metric-value">
-            {service.requestCount.toLocaleString()}
+            {isReal
+              ? (service.httpStatus ?? '—')
+              : (service.requestCount != null ? service.requestCount.toLocaleString() : '—')}
           </span>
         </div>
 
         <div className="service-metric">
-          <span className="service-metric-label">Avg Latency</span>
+          <span className="service-metric-label">Latency</span>
           <span className={`service-metric-value ${service.avgLatency > 150 ? 'warning' : ''}`}>
-            {service.avgLatency}ms
+            {service.avgLatency != null ? `${Math.round(service.avgLatency)}ms` : '—'}
           </span>
         </div>
 
-        <div className="service-metric">
-          <span className="service-metric-label">Errors</span>
-          <span className={`service-metric-value ${service.errorCount > 50 ? 'error' : ''}`}>
-            {service.errorCount}
-          </span>
-        </div>
+        {!isReal && (
+          <>
+            <div className="service-metric">
+              <span className="service-metric-label">Errors</span>
+              <span className={`service-metric-value ${service.errorCount > 50 ? 'error' : ''}`}>
+                {service.errorCount ?? 0}
+              </span>
+            </div>
 
-        <div className="service-metric">
-          <span className="service-metric-label">Version</span>
-          <span className="service-metric-value">{service.version}</span>
-        </div>
+            <div className="service-metric">
+              <span className="service-metric-label">Version</span>
+              <span className="service-metric-value">{service.version ?? '—'}</span>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Footer */}
@@ -106,9 +139,13 @@ const ServiceCard = ({ service, index = 0 }) => {
           <Clock size={11} />
           {service.lastUpdated}
         </span>
-        <span className={`service-card-uptime ${getUptimeColor(service.uptime)}`}>
-          ↑ {service.uptime}% uptime
-        </span>
+        {service.uptime != null ? (
+          <span className={`service-card-uptime ${getUptimeColor(service.uptime)}`}>
+            ↑ {service.uptime}% uptime
+          </span>
+        ) : (
+          <span className="service-card-uptime">—</span>
+        )}
       </div>
     </Link>
   );

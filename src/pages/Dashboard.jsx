@@ -1,37 +1,64 @@
 // ============================================================
 // Dashboard Page
 // ============================================================
-import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Server, Activity, Zap, Clock, AlertTriangle,
   Cpu, HardDrive, Wifi, TrendingUp, CheckCircle
 } from 'lucide-react';
 import StatsCard from '../components/StatsCard';
-import { RequestTrendChart, CpuTrendChart, MemoryTrendChart, ResponseTimeChart, ServicePieChart } from '../components/Charts';
+import { LatencyTrendChart, AvailabilityChart, ServicePieChart } from '../components/Charts';
 import { DashboardSkeleton } from '../components/SkeletonLoader';
-import {
-  dashboardStats, servicesData,
-  requestTrendData, cpuTrendData, memoryTrendData, responseTimeTrendData, pieData
-} from '../data/dummyData';
+import { useTelemetry } from '../hooks/useTelemetry';
 import '../css/Dashboard.css';
 
 /**
- * Main Dashboard page — shows system overview, stats, and key charts
+ * Main Dashboard page — shows system overview, stats, and key charts.
+ * Everything here — stats grid, services list, pie chart, and now the
+ * latency/memory trend charts — is computed live from the collector's
+ * WebSocket feed (useTelemetry) instead of dummyData.
  */
 const Dashboard = () => {
-  const [loading, setLoading] = useState(true);
-
-  // Simulate data loading
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 1200);
-    return () => clearTimeout(t);
-  }, []);
+  const { services: servicesData, latencyChartData, uptimeChartData, connectionStatus } = useTelemetry();
+  const loading = connectionStatus === 'connecting' && servicesData.length === 0;
 
   if (loading) return <DashboardSkeleton />;
 
-  const stats = dashboardStats;
+  // Compute aggregate stats live from whatever services are currently
+  // reporting, instead of reading a hardcoded dashboardStats object.
+  const totalServices = servicesData.length;
+  const activeServices = servicesData.filter(s => s.status !== 'Down').length;
   const downServices = servicesData.filter(s => s.status === 'Down').length;
+
+  const simulatedWithCpu = servicesData.filter(s => s.type !== 'real' && s.cpu != null);
+  const avgCpu = simulatedWithCpu.length
+    ? Math.round(simulatedWithCpu.reduce((sum, s) => sum + s.cpu, 0) / simulatedWithCpu.length)
+    : 0;
+
+  const servicesWithLatency = servicesData.filter(s => s.avgLatency != null);
+  const avgLatency = servicesWithLatency.length
+    ? Math.round(servicesWithLatency.reduce((sum, s) => sum + s.avgLatency, 0) / servicesWithLatency.length)
+    : 0;
+
+  const errorRate = totalServices > 0 ? +((downServices / totalServices) * 100).toFixed(1) : 0;
+
+  const stats = {
+    totalServices,
+    activeServices,
+    avgResponseTime: avgLatency,
+    errorRate,
+    cpuUsage: avgCpu,
+  };
+
+  // Live pie chart data, replacing the hardcoded pieData import
+  const healthyCount = servicesData.filter(s => s.status === 'Healthy').length;
+  const warningCount = servicesData.filter(s => s.status === 'Warning').length;
+  const livePieData = [
+    { name: 'Healthy', value: healthyCount, color: '#10b981' },
+    { name: 'Warning', value: warningCount, color: '#f59e0b' },
+    { name: 'Down', value: downServices, color: '#ef4444' },
+  ];
+
   const hasIssues = downServices > 0 || stats.errorRate > 5;
 
   return (
@@ -45,9 +72,20 @@ const Dashboard = () => {
             </h1>
             <p>Microservices Architecture Telemetry & Distributed Tracing Analytics Panel</p>
           </div>
-          <div className={`system-status-pill ${hasIssues ? 'warning' : ''}`}>
-            <div className="status-pulse" style={{ background: hasIssues ? 'var(--status-warning)' : 'var(--status-healthy)' }} />
-            {hasIssues ? `${downServices} Service(s) Down — Attention Required` : 'All Systems Operational'}
+          <div className={`system-status-pill ${hasIssues || connectionStatus !== 'connected' ? 'warning' : ''}`}>
+            <div
+              className="status-pulse"
+              style={{
+                background: connectionStatus !== 'connected'
+                  ? 'var(--status-error)'
+                  : hasIssues ? 'var(--status-warning)' : 'var(--status-healthy)',
+              }}
+            />
+            {connectionStatus !== 'connected'
+              ? `Collector ${connectionStatus}`
+              : hasIssues
+                ? `${downServices} Service(s) Down — Attention Required`
+                : 'All Systems Operational'}
           </div>
         </div>
       </div>
@@ -73,21 +111,18 @@ const Dashboard = () => {
         />
         <StatsCard
           icon={<Activity size={20} />}
-          label="Total Requests"
-          value={(stats.totalRequests / 1000).toFixed(0) + 'K'}
+          label="Real Services"
+          value={servicesData.filter(s => s.type === 'real').length}
           color="cyan"
-          trend="up"
-          trendValue="+18.2%"
+          trend="neutral"
           animationDelay={120}
         />
         <StatsCard
           icon={<Zap size={20} />}
-          label="Requests / sec"
-          value={stats.requestsPerSecond.toLocaleString()}
-          unit="/s"
+          label="Simulated Services"
+          value={servicesData.filter(s => s.type !== 'real').length}
           color="primary"
-          trend="up"
-          trendValue="+5.4%"
+          trend="neutral"
           animationDelay={180}
         />
         <StatsCard
@@ -121,85 +156,56 @@ const Dashboard = () => {
           animationDelay={360}
         />
         <StatsCard
-          icon={<HardDrive size={20} />}
-          label="Memory Usage"
-          value={stats.memoryUsage}
-          unit="%"
-          color="cyan"
-          progress={stats.memoryUsage}
-          trend="up"
-          trendValue="+3%"
-          animationDelay={420}
-        />
-        <StatsCard
-          icon={<Wifi size={20} />}
-          label="Network Usage"
-          value={stats.networkUsage}
-          unit=" MB/s"
-          color="primary"
-          trend="up"
-          trendValue="+8%"
-          animationDelay={480}
-        />
-        <StatsCard
-          icon={<TrendingUp size={20} />}
-          label="Uptime"
-          value={stats.uptime}
-          unit="%"
-          color="green"
+          icon={<AlertTriangle size={20} />}
+          label="Services Down"
+          value={downServices}
+          color={downServices > 0 ? 'red' : 'green'}
           trend="neutral"
-          animationDelay={540}
+          animationDelay={420}
         />
       </div>
 
-      {/* Charts */}
+      {/* Charts — all live now, sourced from useTelemetry's rolling
+          history rather than dummyData. Two panels (a fixed "Request
+          Trends" count and true P95/P99 percentiles) were removed
+          since we genuinely don't have request-count or large-enough
+          sample sizes to compute those honestly yet — that needs
+          Week 5's multi-service expansion and a longer history window. */}
       <div className="charts-grid">
         <div className="chart-card full-width">
           <div className="chart-header">
             <div>
-              <div className="chart-title">Request Trends</div>
-              <div className="chart-subtitle">Requests & errors over 24 hours</div>
-            </div>
-            <div className="chart-legend">
-              <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#6366f1' }} />Requests
-              </div>
-              <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#ef4444' }} />Errors
+              <div className="chart-title">Latency Trend — All Services</div>
+              <div className="chart-subtitle">
+                Live latency (ms) per service, last {latencyChartData.length} polls
               </div>
             </div>
           </div>
-          <RequestTrendChart data={requestTrendData} />
+          {latencyChartData.length > 0 ? (
+            <LatencyTrendChart data={latencyChartData} />
+          ) : (
+            <p style={{ color: 'var(--text-muted)', padding: '2rem 0', textAlign: 'center' }}>
+              Waiting for enough data points to draw a trend...
+            </p>
+          )}
         </div>
 
-        <div className="chart-card">
+        <div className="chart-card full-width">
           <div className="chart-header">
             <div>
-              <div className="chart-title">CPU Usage by Service</div>
-              <div className="chart-subtitle">24-hour CPU trend per service</div>
+              <div className="chart-title">Uptime by Service</div>
+              <div className="chart-subtitle">
+                % of polls that came back healthy, since this session started
+              </div>
             </div>
           </div>
-          <CpuTrendChart data={cpuTrendData} />
-        </div>
-
-        <div className="chart-card">
-          <div className="chart-header">
-            <div>
-              <div className="chart-title">Memory Trend</div>
-              <div className="chart-subtitle">Avg memory utilization</div>
-            </div>
-          </div>
-          <MemoryTrendChart data={memoryTrendData} />
-        </div>
-
-        <div className="chart-card">
-          <div className="chart-header">
-            <div>
-              <div className="chart-title">Response Time Distribution</div>
-              <div className="chart-subtitle">Avg, P95, P99 latency</div>
-            </div>
-          </div>
-          <ResponseTimeChart data={responseTimeTrendData} />
+          {uptimeChartData.length > 0 ? (
+            <AvailabilityChart data={uptimeChartData} />
+          ) : (
+            <p style={{ color: 'var(--text-muted)', padding: '2rem 0', textAlign: 'center' }}>
+              Collecting data...
+            </p>
+          )}
         </div>
 
         <div className="chart-card">
@@ -209,7 +215,7 @@ const Dashboard = () => {
               <div className="chart-subtitle">Status across all services</div>
             </div>
           </div>
-          <ServicePieChart data={pieData} />
+          <ServicePieChart data={livePieData} />
         </div>
       </div>
 
@@ -231,8 +237,16 @@ const Dashboard = () => {
               <Link key={service.id} to={`/services/${service.id}`} className="service-mini-card">
                 <div className="service-mini-dot" style={{ background: dotColor }} />
                 <div className="service-mini-info">
-                  <div className="service-mini-name">{service.name}</div>
-                  <div className="service-mini-stat">{service.avgLatency}ms · {service.cpu}% CPU</div>
+                  <div className="service-mini-name">
+                    {service.name}
+                    {service.type === 'real' && (
+                      <span style={{ marginLeft: 6, fontSize: '0.6rem', color: '#60a5fa' }}>REAL</span>
+                    )}
+                  </div>
+                  <div className="service-mini-stat">
+                    {service.avgLatency != null ? `${Math.round(service.avgLatency)}ms` : '—'}
+                    {service.cpu != null ? ` · ${Math.round(service.cpu)}% CPU` : ''}
+                  </div>
                 </div>
               </Link>
             );
