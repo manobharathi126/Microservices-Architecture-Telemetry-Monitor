@@ -10,6 +10,7 @@
 //   - Every service has a stable, permanent numeric ID (the DB's
 //     AUTO_INCREMENT primary key) instead of one invented client-side
 
+const http = require('http');
 const { WebSocketServer } = require('ws');
 const db = require('./db');
 
@@ -127,7 +128,66 @@ function makeTraceId() {
   return 'trace-' + Math.random().toString(36).slice(2, 10);
 }
 
-const wss = new WebSocketServer({ port: WEBSOCKET_PORT });
+const ALLOWED_ORIGINS = [
+  'https://microservicestelemetry.netlify.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
+// Create HTTP server to handle health checks, CORS preflight, and attach WebSocketServer
+// This avoids raw "HTTP 426 Upgrade Required" on HTTP requests while preserving WebSocket functionality
+const server = http.createServer((req, res) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  }
+
+  // Handle preflight OPTIONS requests cleanly with 204 No Content
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // Health and root endpoints for Render health checks and status verification
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        status: 'ok',
+        service: 'pulsetrace-collector',
+        protocol: 'WebSocket',
+        message: 'Telemetry collector service is running. Connect via WebSocket (wss://).',
+      })
+    );
+    return;
+  }
+
+  // If /api/login was directed to this service instead of the auth service:
+  if (req.url && req.url.startsWith('/api/')) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        error: 'Service Mismatch',
+        message:
+          'This service is the telemetry WebSocket collector (pulsetrace-collector), not the authentication service. The authentication service runs separately in server/auth-service. Please set VITE_AUTH_API_URL to your deployed auth service URL.',
+      })
+    );
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ message: `Route ${req.method} ${req.url} not found` }));
+});
+
+const wss = new WebSocketServer({ server });
+
+server.listen(WEBSOCKET_PORT, () => {
+  console.log(`[collector] WebSocket and HTTP server listening on port ${WEBSOCKET_PORT}`);
+});
 
 function broadcast(message) {
   const payload = JSON.stringify(message);
@@ -268,7 +328,6 @@ async function main() {
     pollAllServices().catch((err) => console.error('[collector] poll cycle failed:', err.message));
   }, POLL_INTERVAL_MS);
   console.log(`[collector] polling every ${POLL_INTERVAL_MS / 1000}s, persisting to MySQL...`);
-  console.log(`[collector] WebSocket server listening on port ${WEBSOCKET_PORT}`);
 }
 
 main().catch((err) => {

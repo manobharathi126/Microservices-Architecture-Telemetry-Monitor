@@ -8,16 +8,32 @@ dotenv.config();
 
 const app = express();
 
-// Enable CORS for Netlify frontend, Render services, and localhost
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  })
-);
-app.options('*', cors());
+// Allowed origins whitelist — exact Netlify frontend origin + localhost for dev
+const ALLOWED_ORIGINS = [
+  'https://microservicestelemetry.netlify.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without Origin header (curl, health checks, server-to-server)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    console.warn(`[auth-service] CORS blocked unauthorized origin: ${origin}`);
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.use(express.json());
 
@@ -134,6 +150,9 @@ app.use((req, res) => {
 
 // Global error handler — always returns JSON
 app.use((err, req, res, next) => {
+  if (err && err.message && err.message.includes('CORS')) {
+    return res.status(403).json({ message: err.message });
+  }
   console.error('[auth-service] Global error handler caught:', err);
   res.status(err.status || 500).json({ message: err.message || 'Internal server error' });
 });
