@@ -18,6 +18,16 @@
 
     <!-- Theme -->
     <meta name="theme-color" content="#0a0e1a" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('telemetry_theme');
+          if (saved) {
+            document.documentElement.setAttribute('data-theme', saved);
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

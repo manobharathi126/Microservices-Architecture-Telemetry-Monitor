@@ -76,6 +76,72 @@
   /* Font */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Navbar & Chart */
+  --navbar-bg: rgba(10, 14, 26, 0.85);
+  --chart-grid: rgba(255, 255, 255, 0.05);
+}
+
+/* ============================================================
+   Light Theme Override Variables
+   ============================================================ */
+[data-theme="light"] {
+  /* Background Colors */
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f1f5f9;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-glass: rgba(255, 255, 255, 0.85);
+  --bg-glass-hover: rgba(248, 250, 252, 0.95);
+  --navbar-bg: rgba(255, 255, 255, 0.9);
+
+  /* Border Colors */
+  --border-primary: rgba(99, 102, 241, 0.25);
+  --border-secondary: #e2e8f0;
+  --border-hover: rgba(99, 102, 241, 0.45);
+
+  /* Text Colors */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-accent: #4f46e5;
+
+  /* Accent Adjustments for Light Background */
+  --accent-primary: #4f46e5;
+  --accent-secondary: #7c3aed;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 25px rgba(99, 102, 241, 0.12);
+
+  /* Chart & Scrollbar */
+  --chart-grid: rgba(0, 0, 0, 0.07);
+}
+
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.3);
+}
+
+[data-theme="light"] .card,
+[data-theme="light"] .stat-card,
+[data-theme="light"] .chart-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] th {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+[data-theme="light"] tr:hover {
+  background: rgba(99, 102, 241, 0.03);
 }
 
 /* ============================================================

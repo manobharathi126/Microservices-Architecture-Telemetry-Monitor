@@ -358,3 +358,24 @@
     font-size: 1.2rem;
   }
 }
+
+/* ============================================================
+   Light Mode Overrides for Dashboard
+   ============================================================ */
+[data-theme="light"] .welcome-banner {
+  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 50%, #eff6ff 100%);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+[data-theme="light"] .welcome-banner::before {
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, transparent 70%);
+}
+
+[data-theme="light"] .welcome-banner::after {
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.06) 0%, transparent 70%);
+}
+
+[data-theme="light"] .stat-trend.neutral {
+  background: rgba(0, 0, 0, 0.05);
+}
+

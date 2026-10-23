@@ -3,9 +3,10 @@
 // ============================================================
 import { useState } from 'react';
 import {
-  User, Palette, RefreshCw, Bell, Mail, Shield, Info
+  User, Palette, RefreshCw, Bell, Mail, Info
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useTheme } from '../context/ThemeContext';
 import '../css/Pages.css';
 
 const settingsSections = [
@@ -39,14 +40,53 @@ const Settings = () => {
     email: true,
     criticalOnly: false,
   });
-  const [profile, setProfile] = useState({
-    name: 'Arjun Kumar',
-    email: 'arjun@telemetryops.io',
-    role: 'SRE Engineer',
-    team: 'Platform Engineering',
+  const { isDark, toggleTheme } = useTheme();
+  const [profile, setProfile] = useState(() => {
+    try {
+      const raw = localStorage.getItem('authUser');
+      if (raw) {
+        const u = JSON.parse(raw);
+        return {
+          name: u.name || 'Admin',
+          email: u.email || 'admin@example.com',
+          role: u.role || 'Administrator',
+          team: 'Platform Engineering',
+        };
+      }
+      const token = localStorage.getItem('authToken');
+      if (token) {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        return {
+          name: payload.name || 'Admin',
+          email: payload.email || 'admin@example.com',
+          role: payload.role || 'Administrator',
+          team: 'Platform Engineering',
+        };
+      }
+    } catch (e) {}
+    return {
+      name: 'Admin',
+      email: 'admin@example.com',
+      role: 'Administrator',
+      team: 'Platform Engineering',
+    };
   });
 
+  const getInitials = (name) => {
+    if (!name) return 'AD';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return parts[0].slice(0, 2).toUpperCase();
+  };
+
   const handleSave = () => {
+    try {
+      localStorage.setItem('authUser', JSON.stringify({
+        name: profile.name,
+        email: profile.email,
+        role: profile.role,
+      }));
+    } catch (e) {}
     toast.success('Settings saved successfully!', {
       style: { background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-hover)' }
     });
@@ -60,7 +100,7 @@ const Settings = () => {
             <div className="settings-panel-title">Profile Information</div>
             <div className="settings-panel-subtitle">Update your personal account details</div>
 
-            <div className="profile-big-avatar">AK</div>
+            <div className="profile-big-avatar">{getInitials(profile.name)}</div>
 
             {Object.entries(profile).map(([key, val]) => (
               <div key={key} className="settings-row">
@@ -91,7 +131,7 @@ const Settings = () => {
                 <div className="settings-row-desc">Enable dark theme for the interface</div>
               </div>
               <label className="toggle-switch">
-                <input type="checkbox" defaultChecked />
+                <input type="checkbox" checked={isDark} onChange={toggleTheme} />
                 <span className="toggle-slider" />
               </label>
             </div>
@@ -232,7 +272,7 @@ const Settings = () => {
               <div className="settings-row-info">
                 <div className="settings-row-label">Alert Email</div>
               </div>
-              <input className="settings-input" defaultValue="arjun@telemetryops.io" type="email" />
+              <input className="settings-input" defaultValue={profile.email} type="email" />
             </div>
 
             <div className="settings-row">

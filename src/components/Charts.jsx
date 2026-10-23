@@ -55,7 +55,7 @@ export const RequestTrendChart = ({ data }) => (
           <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
         </linearGradient>
       </defs>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
       <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
       <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
       <Tooltip content={<CustomTooltip />} />
@@ -88,7 +88,7 @@ export const LatencyTrendChart = ({ data }) => {
   return (
     <ResponsiveContainer width="100%" height={220}>
       <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
         <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
         <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit="ms" />
         <Tooltip content={<CustomTooltip />} />
@@ -113,7 +113,7 @@ export const LatencyTrendChart = ({ data }) => {
 export const CpuTrendChart = ({ data }) => (
   <ResponsiveContainer width="100%" height={220}>
     <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
       <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
       <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} unit="%" />
       <Tooltip content={<CustomTooltip />} />
@@ -138,7 +138,7 @@ export const MemoryTrendChart = ({ data, unit = '%' }) => (
           <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
         </linearGradient>
       </defs>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
       <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
       <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit={unit} />
       <Tooltip content={<CustomTooltip />} />
@@ -153,7 +153,7 @@ export const MemoryTrendChart = ({ data, unit = '%' }) => (
 export const ResponseTimeChart = ({ data }) => (
   <ResponsiveContainer width="100%" height={220}>
     <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
       <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
       <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit="ms" />
       <Tooltip content={<CustomTooltip />} />
@@ -171,7 +171,7 @@ export const ResponseTimeChart = ({ data }) => (
 export const AvailabilityChart = ({ data }) => (
   <ResponsiveContainer width="100%" height={220}>
     <BarChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 40 }} barSize={18}>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
       <XAxis dataKey="name" tick={{ fill: 'var(--text-muted)', fontSize: 9 }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" interval={0} />
       <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} unit="%" />
       <Tooltip content={<CustomTooltip />} />
@@ -190,7 +190,7 @@ export const AvailabilityChart = ({ data }) => (
 export const SlowServicesChart = ({ data }) => (
   <ResponsiveContainer width="100%" height={220}>
     <BarChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }} barSize={14}>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" horizontal={false} />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
       <XAxis type="number" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit="ms" />
       <YAxis dataKey="name" type="category" tick={{ fill: 'var(--text-muted)', fontSize: 9 }} axisLine={false} tickLine={false} width={120} />
       <Tooltip content={<CustomTooltip />} />
@@ -209,7 +209,7 @@ export const SlowServicesChart = ({ data }) => (
 export const ErrorServicesChart = ({ data }) => (
   <ResponsiveContainer width="100%" height={220}>
     <BarChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }} barSize={14}>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" horizontal={false} />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
       <XAxis type="number" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
       <YAxis dataKey="name" type="category" tick={{ fill: 'var(--text-muted)', fontSize: 9 }} axisLine={false} tickLine={false} width={120} />
       <Tooltip content={<CustomTooltip />} />
@@ -238,7 +238,7 @@ export const TrafficChart = ({ data }) => (
           <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
         </linearGradient>
       </defs>
-      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
       <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
       <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} unit=" MB" />
       <Tooltip content={<CustomTooltip />} />
