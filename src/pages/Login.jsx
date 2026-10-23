@@ -4,6 +4,19 @@ import { toast } from 'react-hot-toast';
 import '../css/Login.css';
 
 /**
+ * Resolve the authentication backend base URL.
+ * In production (Netlify), it uses VITE_AUTH_API_URL or VITE_API_URL pointing to the Render backend.
+ * In local development, defaults to empty string so requests use the Vite server proxy.
+ */
+const getApiBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_AUTH_API_URL || import.meta.env.VITE_API_URL;
+  if (envUrl && typeof envUrl === 'string') {
+    return envUrl.trim().replace(/\/+$/, '');
+  }
+  return '';
+};
+
+/**
  * Login page component.
  * Matches the existing dashboard theme using shared CSS variables.
  */
@@ -25,16 +38,52 @@ export default function Login() {
       return;
     }
     setLoading(true);
+
+    const apiBase = getApiBaseUrl();
+    const endpoint = `${apiBase}/api/login`;
+
     try {
-      const resp = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        throw new Error(data.message || 'Login failed');
+      let resp;
+      try {
+        resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ email, password }),
+        });
+      } catch (networkErr) {
+        throw new Error(
+          `Unable to reach authentication server at ${endpoint || '/api/login'}. Please ensure the backend is running and CORS is enabled.`
+        );
       }
+
+      // Inspect Content-Type before parsing to avoid JSON.parse unexpected character errors
+      const contentType = resp.headers.get('content-type') || '';
+      let data = {};
+
+      if (contentType.includes('application/json')) {
+        try {
+          data = await resp.json();
+        } catch (jsonErr) {
+          throw new Error('Received malformed JSON from the authentication server.');
+        }
+      } else {
+        // Handle non-JSON responses (e.g., Netlify SPA index.html fallback, 502/503 HTML pages)
+        const text = await resp.text();
+        if (text.includes('<!doctype') || text.includes('<html')) {
+          throw new Error(
+            'Authentication endpoint returned HTML instead of JSON. If deployed on Netlify, please ensure the VITE_AUTH_API_URL environment variable is set to your Render backend URL.'
+          );
+        }
+        throw new Error(text || `Server returned non-JSON response (${resp.status})`);
+      }
+
+      if (!resp.ok) {
+        throw new Error(data.message || `Login failed (${resp.status})`);
+      }
+
       // Store token and user profile
       localStorage.setItem('authToken', data.token);
       if (data.user) {
@@ -43,8 +92,9 @@ export default function Login() {
       toast.success('Logged in successfully');
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err.message);
-      toast.error(err.message);
+      const errMsg = err.message || 'Login failed';
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setLoading(false);
     }

@@ -1,1 +1,3 @@
+# Netlify rewrite rules
+# SPA client-side routing fallback:
 /*    /index.html   200
