@@ -2,14 +2,26 @@
 // api.js — Centralized API Client for Telemetry Collector
 // ============================================================
 
-const wsUrl = import.meta.env.VITE_COLLECTOR_WS_URL || 'ws://localhost:6001';
-export const COLLECTOR_API_URL = import.meta.env.VITE_COLLECTOR_API_URL || wsUrl.replace(/^ws(s?):\/\//i, 'http$1://');
+const resolveCollectorApiUrl = () => {
+  const explicitApi = import.meta.env.VITE_COLLECTOR_API_URL;
+  if (explicitApi && typeof explicitApi === 'string' && explicitApi.trim()) {
+    return explicitApi.trim().replace(/\/+$/, '');
+  }
+  const wsUrl = import.meta.env.VITE_COLLECTOR_WS_URL;
+  if (wsUrl && typeof wsUrl === 'string' && wsUrl.trim()) {
+    return wsUrl.trim().replace(/\/+$/, '').replace(/^ws(s?):\/\//i, 'http$1://');
+  }
+  return 'http://localhost:6001';
+};
+
+export const COLLECTOR_API_URL = resolveCollectorApiUrl();
 
 /**
  * Safe fetch helper with timeout and JSON error handling
  */
 async function apiFetch(endpoint, options = {}) {
-  const url = `${COLLECTOR_API_URL}${endpoint}`;
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${COLLECTOR_API_URL}${cleanEndpoint}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 10000);
 

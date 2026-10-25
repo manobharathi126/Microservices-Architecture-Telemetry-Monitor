@@ -233,8 +233,13 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Normalize request URL to prevent protocol-relative URL parsing bugs (e.g. //api/...)
+  const normalizedReqUrl = req.url ? req.url.replace(/^\/+/, '/') : '/';
+  const parsedUrl = new URL(normalizedReqUrl, `http://${req.headers.host || 'localhost'}`);
+  const pathname = parsedUrl.pathname.replace(/\/+$/, '') || '/';
+
   // Health and root endpoints for Render health checks and status verification
-  if (req.url === '/health' || req.url === '/') {
+  if (pathname === '/health' || pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
@@ -261,9 +266,6 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
-
-  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const pathname = parsedUrl.pathname;
 
   // Helper to read JSON request body safely
   const readJsonBody = () => new Promise((resolve) => {
