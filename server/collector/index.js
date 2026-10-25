@@ -19,8 +19,20 @@ const WEBSOCKET_PORT = Number(process.env.PORT) || 6001;
 const FETCH_TIMEOUT_MS = 5000;
 const SLOW_TRACE_THRESHOLD_MS = 800;
 
+// Dynamic operational monitoring configuration
+const collectorConfig = {
+  slowTraceThresholdMs: Number(process.env.SLOW_TRACE_THRESHOLD_MS) || SLOW_TRACE_THRESHOLD_MS,
+  pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || POLL_INTERVAL_MS,
+  consecutiveDegradedThreshold: 2,
+  consecutiveHealthyRecovery: 2,
+  fetchTimeoutMs: FETCH_TIMEOUT_MS,
+};
+
 const COINGECKO_PING_URL = 'https://api.coingecko.com/api/v3/ping';
-const COINGECKO_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd';
+
+const serviceHealthyConsecutive = new Map();
+const serviceDegradedConsecutive = new Map();
+
 
 // Seed services — only inserted if the database is empty (first run).
 // After that, the database is the source of truth; editing this list
@@ -37,8 +49,9 @@ const SEED_SERVICES = [
 const INDICATOR_TO_STATUS = { none: 'healthy', minor: 'degraded', major: 'degraded', critical: 'down' };
 
 async function fetchWithTimeout(url, options = {}) {
+  const timeoutMs = options.timeout || collectorConfig.fetchTimeoutMs;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
@@ -93,13 +106,17 @@ async function pollOneService(service) {
     try {
       const pingResponse = await fetchWithTimeout(COINGECKO_PING_URL);
       const latencyMs = Date.now() - start;
+      const isHighLatency = latencyMs > collectorConfig.slowTraceThresholdMs;
       let status = 'healthy';
-      try {
-        await fetchWithTimeout(COINGECKO_PRICE_URL);
-      } catch {
+      let details = null;
+      if (!pingResponse.ok) {
         status = 'degraded';
+        details = `HTTP ${pingResponse.status}`;
+      } else if (isHighLatency) {
+        status = 'degraded';
+        details = `High latency ${latencyMs}ms (threshold: ${collectorConfig.slowTraceThresholdMs}ms)`;
       }
-      return { status: pingResponse.ok ? status : 'degraded', latencyMs, httpStatus: pingResponse.status };
+      return { status, latencyMs, httpStatus: pingResponse.status, details };
     } catch (err) {
       const { status, message } = classifyNetworkError(err);
       return { status, latencyMs: Date.now() - start, error: message };
@@ -110,14 +127,78 @@ async function pollOneService(service) {
   try {
     const response = await fetchWithTimeout(service.url);
     const latencyMs = Date.now() - start;
+    const isHighLatency = latencyMs > collectorConfig.slowTraceThresholdMs;
 
     if (service.kind === 'statuspage') {
-      const body = await response.json();
-      const indicator = body?.status?.indicator ?? 'unknown';
-      return { status: INDICATOR_TO_STATUS[indicator] ?? 'degraded', latencyMs, httpStatus: response.status };
+      let body;
+      try {
+        body = await response.json();
+      } catch {
+        // If JSON cannot be parsed but response is HTTP 200, do not mark degraded without reason
+        const status = response.ok ? (isHighLatency ? 'degraded' : 'healthy') : 'degraded';
+        const details = response.ok ? (isHighLatency ? `High latency ${latencyMs}ms` : null) : `HTTP ${response.status}`;
+        return { status, latencyMs, httpStatus: response.status, details };
+      }
+
+      const rawIndicator = body?.status?.indicator;
+      const indicator = (rawIndicator || '').toLowerCase();
+      const description = body?.status?.description || '';
+
+      let status = 'healthy';
+      if (indicator === 'critical') {
+        status = 'down';
+      } else if (indicator === 'minor' || indicator === 'major') {
+        status = 'degraded';
+      } else if (indicator === 'none') {
+        status = isHighLatency ? 'degraded' : 'healthy';
+      } else if (!response.ok) {
+        status = response.status >= 500 ? 'down' : 'degraded';
+      } else {
+        // HTTP 200 with unknown or missing indicator defaults to healthy unless high latency
+        status = isHighLatency ? 'degraded' : 'healthy';
+      }
+
+      const details = description
+        ? `${description} (indicator: ${indicator || 'none'})`
+        : indicator && indicator !== 'none'
+          ? `StatusPage indicator: ${indicator}`
+          : isHighLatency
+            ? `High latency ${latencyMs}ms (threshold: ${collectorConfig.slowTraceThresholdMs}ms)`
+            : null;
+
+      return {
+        status,
+        latencyMs,
+        httpStatus: response.status,
+        indicator: indicator || undefined,
+        description: description || undefined,
+        details: details || undefined,
+      };
     }
 
-    return { status: response.ok ? 'healthy' : 'degraded', latencyMs, httpStatus: response.status };
+    if (!response.ok) {
+      return {
+        status: response.status >= 500 ? 'down' : 'degraded',
+        latencyMs,
+        httpStatus: response.status,
+        details: `HTTP ${response.status}`,
+      };
+    }
+
+    if (isHighLatency) {
+      return {
+        status: 'degraded',
+        latencyMs,
+        httpStatus: response.status,
+        details: `High latency ${latencyMs}ms (threshold: ${collectorConfig.slowTraceThresholdMs}ms)`,
+      };
+    }
+
+    return {
+      status: 'healthy',
+      latencyMs,
+      httpStatus: response.status,
+    };
   } catch (err) {
     const { status, message } = classifyNetworkError(err);
     return { status, latencyMs: Date.now() - start, error: message };
@@ -125,7 +206,7 @@ async function pollOneService(service) {
 }
 
 function makeTraceId() {
-  return 'trace-' + Math.random().toString(36).slice(2, 10);
+  return `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 const ALLOWED_ORIGINS = [
@@ -141,7 +222,7 @@ const server = http.createServer((req, res) => {
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
   }
 
@@ -159,15 +240,381 @@ const server = http.createServer((req, res) => {
       JSON.stringify({
         status: 'ok',
         service: 'pulsetrace-collector',
-        protocol: 'WebSocket',
-        message: 'Telemetry collector service is running. Connect via WebSocket (wss://).',
+        protocol: 'WebSocket + HTTP',
+        endpoints: [
+          'GET /health',
+          'GET /api/search?q=',
+          'GET /api/traces?limit=',
+          'GET /api/analytics?range=1h|6h|24h|7d|30d',
+          'GET /api/logs?level=&service=&search=&limit=',
+          'POST /api/logs/ingest',
+          'GET /api/alerts?status=&severity=&search=&limit=',
+          'GET /api/alerts/summary',
+          'POST /api/alerts/:id/ack',
+          'POST /api/alerts/:id/resolve',
+          'POST /api/alerts/:id/read',
+          'POST /api/alerts/read-all',
+          'GET /api/services/:id',
+          'DELETE /api/services/:id',
+        ],
       })
     );
     return;
   }
 
-  // If /api/login was directed to this service instead of the auth service:
-  if (req.url && req.url.startsWith('/api/')) {
+  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const pathname = parsedUrl.pathname;
+
+  // Helper to read JSON request body safely
+  const readJsonBody = () => new Promise((resolve) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch {
+        resolve({});
+      }
+    });
+  });
+
+  // --- Collector Health & Status Endpoint ---
+  if (req.method === 'GET' && (pathname === '/health' || pathname === '/api/status')) {
+    const dbStatus = db.getConnectionStatus();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        status: 'ok',
+        service: 'pulsetrace-collector',
+        database: dbStatus,
+        config: collectorConfig,
+        timestamp: new Date().toISOString(),
+      })
+    );
+    return;
+  }
+
+  // --- Operational Monitoring Configuration Endpoints ---
+  if (req.method === 'GET' && pathname === '/api/config') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(collectorConfig));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/config') {
+    if (process.env.READ_ONLY_DEMO === 'true') {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'This shared demo is read-only.' }));
+      return;
+    }
+    readJsonBody().then((body) => {
+      const { slowTraceThresholdMs, consecutiveDegradedThreshold, consecutiveHealthyRecovery, fetchTimeoutMs } = body || {};
+
+      if (slowTraceThresholdMs !== undefined) {
+        const val = Number(slowTraceThresholdMs);
+        if (isNaN(val) || val < 100 || val > 10000) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'slowTraceThresholdMs must be a number between 100 and 10000 ms.' }));
+          return;
+        }
+        collectorConfig.slowTraceThresholdMs = Math.round(val);
+      }
+
+      if (consecutiveDegradedThreshold !== undefined) {
+        const val = Number(consecutiveDegradedThreshold);
+        if (isNaN(val) || val < 1 || val > 10) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'consecutiveDegradedThreshold must be an integer between 1 and 10.' }));
+          return;
+        }
+        collectorConfig.consecutiveDegradedThreshold = Math.floor(val);
+      }
+
+      if (consecutiveHealthyRecovery !== undefined) {
+        const val = Number(consecutiveHealthyRecovery);
+        if (isNaN(val) || val < 1 || val > 10) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'consecutiveHealthyRecovery must be an integer between 1 and 10.' }));
+          return;
+        }
+        collectorConfig.consecutiveHealthyRecovery = Math.floor(val);
+      }
+
+      if (fetchTimeoutMs !== undefined) {
+        const val = Number(fetchTimeoutMs);
+        if (isNaN(val) || val < 1000 || val > 30000) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'fetchTimeoutMs must be a number between 1000 and 30000 ms.' }));
+          return;
+        }
+        collectorConfig.fetchTimeoutMs = Math.round(val);
+      }
+
+      broadcast({ kind: 'config_updated', config: collectorConfig });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, config: collectorConfig }));
+    });
+    return;
+  }
+
+  // --- Traces API Endpoint ---
+  if (req.method === 'GET' && pathname === '/api/traces') {
+    const limit = Math.min(Number(parsedUrl.searchParams.get('limit')) || 20, 100);
+    db.getRecentTraces(limit)
+      .then((traces) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(traces));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message, traces: [] }));
+      });
+    return;
+  }
+
+  // --- Global Unified Search API Endpoint ---
+  if (req.method === 'GET' && pathname === '/api/search') {
+    const q = parsedUrl.searchParams.get('q') || '';
+    db.searchAll(q)
+      .then((results) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(results));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message, services: [], traces: [], logs: [], total: 0 }));
+      });
+    return;
+  }
+
+  // --- Analytics API Endpoint ---
+  if (req.method === 'GET' && pathname === '/api/analytics') {
+    const range = parsedUrl.searchParams.get('range') || '6h';
+    db.getAnalyticsData(range)
+      .then((data) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(data));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message, hasData: false }));
+      });
+    return;
+  }
+
+  // --- Logs API Endpoints ---
+  if (req.method === 'GET' && pathname === '/api/logs') {
+    const level = parsedUrl.searchParams.get('level');
+    const service = parsedUrl.searchParams.get('service');
+    const search = parsedUrl.searchParams.get('search');
+    const limit = parsedUrl.searchParams.get('limit');
+    db.getLogs({ level, service, search, limit })
+      .then((data) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(data));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message, logs: [], totalCount: 0 }));
+      });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/logs/ingest') {
+    readJsonBody().then((body) => {
+      const { service, level, message } = body;
+      if (!message) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Log message is required.' }));
+        return;
+      }
+      db.recordLog({
+        serviceName: service || 'Application',
+        level: level || 'INFO',
+        message,
+        source: 'service',
+      })
+        .then((log) => {
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, log }));
+        })
+        .catch((err) => {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        });
+    });
+    return;
+  }
+
+  // --- Alerts API Endpoints ---
+  if (req.method === 'GET' && pathname === '/api/alerts/summary') {
+    db.getAlertsSummary()
+      .then((summary) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(summary));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/alerts') {
+    const status = parsedUrl.searchParams.get('status');
+    const severity = parsedUrl.searchParams.get('severity');
+    const search = parsedUrl.searchParams.get('search');
+    const limit = parsedUrl.searchParams.get('limit');
+    db.getAlerts({ status, severity, search, limit })
+      .then((alerts) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(alerts));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message, alerts: [] }));
+      });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/alerts/') && pathname.endsWith('/ack')) {
+    const parts = pathname.split('/');
+    const id = parts[3];
+    db.acknowledgeAlert(id)
+      .then((alert) => {
+        if (!alert) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Alert not found.' }));
+          return;
+        }
+        broadcast({ kind: 'alert_acknowledged', alert });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, alert }));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/alerts/') && pathname.endsWith('/resolve')) {
+    const parts = pathname.split('/');
+    const id = parts[3];
+    db.resolveAlert(id)
+      .then((alert) => {
+        if (!alert) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Alert not found.' }));
+          return;
+        }
+        broadcast({ kind: 'alert_resolved', alert });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, alert }));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/alerts/') && pathname.endsWith('/read')) {
+    const parts = pathname.split('/');
+    const id = parts[3];
+    db.markAlertRead(id)
+      .then((alert) => {
+        if (!alert) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Alert not found.' }));
+          return;
+        }
+        broadcast({ kind: 'alert_read', alert });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, alert }));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/alerts/read-all') {
+    db.markAllAlertsRead()
+      .then((result) => {
+        broadcast({ kind: 'alerts_all_read' });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, count: result.count }));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
+  // HTTP GET endpoint for detailed service metrics, readings, logs, and alerts
+  if (req.method === 'GET' && pathname.startsWith('/api/services/')) {
+    const idStr = pathname.split('/api/services/')[1];
+    const numericId = Number(idStr);
+    if (!numericId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid service ID.' }));
+      return;
+    }
+    db.getServiceDetails(numericId)
+      .then((details) => {
+        if (!details) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Service not found.' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(details));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      });
+    return;
+  }
+
+  // HTTP DELETE endpoint for services
+  if (req.method === 'DELETE' && pathname.startsWith('/api/services/')) {
+    if (process.env.READ_ONLY_DEMO === 'true') {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'This shared demo is read-only.' }));
+      return;
+    }
+    const id = pathname.split('/api/services/')[1];
+    const numericId = Number(id);
+    if (!numericId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Invalid service ID.' }));
+      return;
+    }
+    db.deleteService(numericId)
+      .then((deleted) => {
+        if (!deleted) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Service not found or already deleted.' }));
+          return;
+        }
+        console.log(`[collector] deleted service via HTTP (id=${numericId})`);
+        broadcast({ kind: 'service_deleted', id: numericId });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, id: numericId, message: 'Service deleted successfully.' }));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
+  // If /api/login or /api/me was directed to this service instead of the auth service:
+  if (pathname.startsWith('/api/login') || pathname.startsWith('/api/me')) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
@@ -235,6 +682,32 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ kind: 'add_service_result', ok: false, error: err.message }));
       }
     }
+
+    if (msg.kind === 'delete_service') {
+      if (process.env.READ_ONLY_DEMO === 'true') {
+        ws.send(JSON.stringify({ kind: 'delete_service_result', ok: false, id: msg.id, error: 'This shared demo is read-only.' }));
+        return;
+      }
+      const { id, name } = msg;
+      const numericId = Number(id);
+      if (!numericId) {
+        ws.send(JSON.stringify({ kind: 'delete_service_result', ok: false, id, error: 'Invalid service ID.' }));
+        return;
+      }
+
+      try {
+        const deleted = await db.deleteService(numericId);
+        if (!deleted) {
+          ws.send(JSON.stringify({ kind: 'delete_service_result', ok: false, id: numericId, name, error: 'Service not found or already deleted.' }));
+          return;
+        }
+        console.log(`[collector] deleted service (id=${numericId}): ${name || ''}`);
+        ws.send(JSON.stringify({ kind: 'delete_service_result', ok: true, id: numericId, name }));
+        broadcast({ kind: 'service_deleted', id: numericId, name });
+      } catch (err) {
+        ws.send(JSON.stringify({ kind: 'delete_service_result', ok: false, id: numericId, name, error: err.message }));
+      }
+    }
   });
 
   ws.on('close', () => console.log('[collector] dashboard disconnected.'));
@@ -244,14 +717,23 @@ wss.on('connection', (ws) => {
   // block or delay the listener registration above.
   (async () => {
     try {
-      const [services, recentReadings, recentTraces, uptimeStats] = await Promise.all([
+      const [services, recentReadings, recentTraces, uptimeStats, alertsSummary] = await Promise.all([
         db.getAllServices(),
         db.getRecentReadings(),
         db.getRecentTraces(),
         db.getUptimeStats(),
+        db.getAlertsSummary(),
       ]);
       if (ws.readyState === 1) {
-        ws.send(JSON.stringify({ kind: 'db_history', services, recentReadings, recentTraces, uptimeStats }));
+        ws.send(JSON.stringify({
+          kind: 'db_history',
+          services,
+          recentReadings,
+          recentTraces,
+          uptimeStats,
+          alertsSummary,
+          dbMode: db.getConnectionStatus().useMemoryStore ? 'memory' : 'mysql',
+        }));
       }
     } catch (err) {
       console.error('[collector] failed to load history from database:', err.message);
@@ -263,20 +745,106 @@ async function pollAllServices() {
   const cycleStart = Date.now();
   const services = await db.getAllServices();
 
-  // Run every service check CONCURRENTLY instead of sequentially.
-  // Previously this was a `for...of` loop with `await` inside — meaning
-  // if one service took 5 seconds to respond (or hit the timeout), every
-  // service polled after it had to wait for that one to finish first,
-  // even though they have nothing to do with each other. A single slow
-  // or hanging service could delay the entire poll cycle by seconds.
-  //
-  // Promise.all fires all requests at once; the cycle now takes roughly
-  // as long as the SLOWEST single service, not the SUM of all of them.
   const results = await Promise.all(
     services.map(async (service) => {
-      const spanStart = Date.now() - cycleStart; // ~0 for all, since they start together
+      const spanStart = Date.now() - cycleStart;
       const result = await pollOneService(service);
       await db.recordReading(service.id, result);
+
+      // Record accurate health-check event log
+      let logLevel = 'INFO';
+      let logMsg = `Health check OK (HTTP ${result.httpStatus || 200}, ${result.latencyMs ?? 0}ms)`;
+      if (result.status === 'down') {
+        logLevel = 'ERROR';
+        logMsg = `Health check failed: ${result.error || ('HTTP ' + (result.httpStatus || 'N/A'))}`;
+      } else if (result.status === 'degraded') {
+        logLevel = 'WARN';
+        logMsg = result.details
+          ? `Service ${service.name} degraded: ${result.details}`
+          : `Service ${service.name} response degraded (${result.latencyMs ?? 0}ms, HTTP ${result.httpStatus || 'N/A'})`;
+      }
+      await db.recordLog({
+        serviceId: service.id,
+        serviceName: service.name,
+        level: logLevel,
+        message: logMsg,
+        source: 'health_check',
+      });
+
+      // Real alert evaluation engine & deduplication with anti-flapping
+      if (result.status === 'down') {
+        serviceHealthyConsecutive.set(service.id, 0);
+        serviceDegradedConsecutive.set(service.id, 0);
+        const existingAlert = await db.getActiveAlertByServiceAndType(service.id, 'service_down');
+        if (!existingAlert) {
+          // Resolve any active degraded alerts superseded by service down
+          await db.resolveActiveAlertsForService(service.id, 'degraded_status');
+          await db.resolveActiveAlertsForService(service.id, 'high_latency');
+
+          const alert = await db.createAlert({
+            serviceId: service.id,
+            serviceName: service.name,
+            severity: 'Critical',
+            message: `Service ${service.name} is down: ${result.error || ('HTTP ' + (result.httpStatus || 'N/A'))}`,
+            alertType: 'service_down',
+          });
+          broadcast({ kind: 'new_alert', alert });
+        }
+      } else if (result.status === 'degraded' || (result.latencyMs != null && result.latencyMs > collectorConfig.slowTraceThresholdMs)) {
+        serviceHealthyConsecutive.set(service.id, 0);
+        const degCount = (serviceDegradedConsecutive.get(service.id) || 0) + 1;
+        serviceDegradedConsecutive.set(service.id, degCount);
+
+        // Require consecutive degraded cycles to prevent false alarms
+        if (degCount >= collectorConfig.consecutiveDegradedThreshold) {
+          const isHighLatency = result.latencyMs != null && result.latencyMs > collectorConfig.slowTraceThresholdMs;
+          const alertType = isHighLatency ? 'high_latency' : 'degraded_status';
+          const existingDown = await db.getActiveAlertByServiceAndType(service.id, 'service_down');
+          if (!existingDown) {
+            const existingAlert = await db.getActiveAlertByServiceAndType(service.id, alertType);
+            if (!existingAlert) {
+              let alertMsg;
+              if (isHighLatency) {
+                alertMsg = `High latency on ${service.name}: ${result.latencyMs}ms (threshold: ${collectorConfig.slowTraceThresholdMs}ms)`;
+              } else if (result.details) {
+                alertMsg = `Service ${service.name} is reporting degraded health: ${result.details} (HTTP ${result.httpStatus || 200})`;
+              } else {
+                alertMsg = `Service ${service.name} is reporting degraded health (HTTP ${result.httpStatus || 'N/A'}, ${result.latencyMs ?? 0}ms)`;
+              }
+              const alert = await db.createAlert({
+                serviceId: service.id,
+                serviceName: service.name,
+                severity: 'Warning',
+                message: alertMsg,
+                alertType,
+              });
+              broadcast({ kind: 'new_alert', alert });
+            }
+          }
+        }
+      } else if (result.status === 'healthy') {
+        serviceDegradedConsecutive.set(service.id, 0);
+        const healCount = (serviceHealthyConsecutive.get(service.id) || 0) + 1;
+        serviceHealthyConsecutive.set(service.id, healCount);
+
+        // Require consecutive healthy cycles before resolving to ensure recovery is stable
+        if (healCount >= collectorConfig.consecutiveHealthyRecovery) {
+          const resolvedDown = await db.resolveActiveAlertsForService(service.id, 'service_down');
+          const resolvedLat = await db.resolveActiveAlertsForService(service.id, 'high_latency');
+          const resolvedDeg = await db.resolveActiveAlertsForService(service.id, 'degraded_status');
+          if (resolvedDown > 0 || resolvedLat > 0 || resolvedDeg > 0) {
+            broadcast({ kind: 'alert_resolved', serviceId: service.id });
+            await db.recordLog({
+              serviceId: service.id,
+              serviceName: service.name,
+              level: 'INFO',
+              message: `Service ${service.name} has recovered to healthy status`,
+              source: 'health_check',
+            });
+          }
+        }
+      }
+
       return { service, spanStart, result };
     })
   );
@@ -289,6 +857,7 @@ async function pollAllServices() {
   }));
 
   const spans = results.map(({ service, spanStart, result }) => ({
+    id: `span-${service.id}-${cycleStart}`,
     serviceId: service.id,
     service: service.name,
     // Three-way: a confirmed failure is 'Error', a timeout/DNS issue
@@ -298,19 +867,21 @@ async function pollAllServices() {
     status: result.status === 'down' ? 'Error' : result.status === 'unknown' ? 'Unknown' : 'Success',
     duration: result.latencyMs ?? 0,
     start: spanStart,
+    httpStatus: result.httpStatus ?? null,
+    error: result.error || result.details || null,
   }));
 
   const tick = { time: new Date().toISOString(), readings: tickReadings };
   broadcast({ kind: 'tick', ...tick });
 
   const totalDuration = spans.length ? Math.max(...spans.map((s) => s.start + s.duration)) : 0;
-  const hasError = spans.some((s) => s.status === 'Error');
+  const hasError = spans.some((s) => s.status === 'Error' || s.status === 'Unknown');
   const trace = {
     id: makeTraceId(),
     name: 'Telemetry Poll Cycle',
     timestamp: tick.time,
     duration: totalDuration,
-    status: hasError ? 'Error' : totalDuration > SLOW_TRACE_THRESHOLD_MS ? 'Slow' : 'Success',
+    status: hasError ? 'Error' : totalDuration > collectorConfig.slowTraceThresholdMs ? 'Slow' : 'Success',
     spans,
   };
   await db.recordTrace(trace);

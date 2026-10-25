@@ -1,9 +1,9 @@
 @echo off
-title Stop PulseTrace Services
+title Stop TelemetryOps Services
 setlocal EnableDelayedExpansion
 
 echo ==============================================================
-echo              Stopping PulseTrace Services
+echo              Stopping TelemetryOps Services
 echo ==============================================================
 echo.
 
@@ -17,7 +17,12 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr :6001 ^| findstr LISTENING') 
     taskkill /f /pid %%a >nul 2>&1
 )
 
+echo [*] Stopping authentication service (port 5000)...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :5000 ^| findstr LISTENING') do (
+    taskkill /f /pid %%a >nul 2>&1
+)
+
 echo.
-echo [OK] All PulseTrace services stopped.
+echo [OK] All TelemetryOps services stopped.
 echo ==============================================================
 timeout /t 2 >nul 2>&1

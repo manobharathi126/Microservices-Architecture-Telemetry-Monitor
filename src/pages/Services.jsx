@@ -2,7 +2,9 @@
 // Services Page
 // ============================================================
 import { useState, useMemo, useEffect } from 'react';
-import { Search, Filter, Server, WifiOff, Plus, X, Check, AlertCircle } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Search, Server, WifiOff, Plus, X, Check, AlertCircle, Trash2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import ServiceCard from '../components/ServiceCard';
 import { SkeletonServiceCard } from '../components/SkeletonLoader';
 import { useTelemetry } from '../hooks/useTelemetry';
@@ -16,13 +18,35 @@ import '../css/Services.css';
  */
 const Services = () => {
   const readOnlyDemo = import.meta.env.VITE_READ_ONLY_DEMO === 'true';
-  const { services: servicesData, connectionStatus, addService, addServiceStatus } = useTelemetry();
-  const [search, setSearch] = useState('');
+  const { services: servicesData, connectionStatus, addService, addServiceStatus, deleteService } = useTelemetry();
+  const [searchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get('search') || '');
   const [statusFilter, setStatusFilter] = useState('All');
+
+  useEffect(() => {
+    const q = searchParams.get('search');
+    if (q != null) setSearch(q);
+  }, [searchParams]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
   const [newKind, setNewKind] = useState('ping');
+  const [serviceToDelete, setServiceToDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+
+  // Close modal on Escape key
+  useEffect(() => {
+    if (!serviceToDelete) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !isDeleting) {
+        setServiceToDelete(null);
+        setDeleteError(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [serviceToDelete, isDeleting]);
 
   // "Loading" now means genuinely waiting for the first live reading,
   // not a fixed artificial delay.
@@ -43,6 +67,38 @@ const Services = () => {
     e.preventDefault();
     if (!newName.trim() || !newUrl.trim()) return;
     addService(newName.trim(), newUrl.trim(), newKind);
+  };
+
+  const handleInitiateDelete = (service) => {
+    if (service.isProtected) {
+      toast.error(`Service "${service.name}" is protected and cannot be deleted.`);
+      return;
+    }
+    setServiceToDelete(service);
+    setDeleteError(null);
+  };
+
+  const handleCancelDelete = () => {
+    if (isDeleting) return;
+    setServiceToDelete(null);
+    setDeleteError(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!serviceToDelete || isDeleting) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteService(serviceToDelete.id, serviceToDelete.name);
+      toast.success(`Service "${serviceToDelete.name}" deleted successfully.`);
+      setServiceToDelete(null);
+    } catch (err) {
+      const msg = err.message || `Failed to delete service "${serviceToDelete.name}".`;
+      setDeleteError(msg);
+      toast.error(msg);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const filtered = useMemo(() => {
@@ -222,8 +278,87 @@ const Services = () => {
       ) : (
         <div className="services-grid">
           {filtered.map((service, i) => (
-            <ServiceCard key={service.id} service={service} index={i} />
+            <ServiceCard
+              key={service.id}
+              service={service}
+              index={i}
+              onDelete={!readOnlyDemo ? handleInitiateDelete : undefined}
+            />
           ))}
+        </div>
+      )}
+
+      {/* Delete Service Confirmation Modal */}
+      {serviceToDelete && (
+        <div
+          className="modal-overlay"
+          onClick={handleCancelDelete}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+        >
+          <div className="delete-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="delete-modal-header">
+              <div className="delete-modal-icon-wrapper">
+                <Trash2 size={20} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3 id="delete-dialog-title" className="delete-modal-title">Delete Service</h3>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  Confirm removal from cluster monitoring
+                </span>
+              </div>
+              <button
+                type="button"
+                className="delete-modal-close-btn"
+                onClick={handleCancelDelete}
+                disabled={isDeleting}
+                aria-label="Close dialog"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="delete-modal-body">
+              Are you sure you want to delete the service <strong className="delete-modal-service-name">'{serviceToDelete.name}'</strong>? This action cannot be undone.
+            </div>
+
+            {deleteError && (
+              <div className="delete-modal-error">
+                <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            <div className="delete-modal-actions">
+              <button
+                type="button"
+                className="btn-cancel"
+                onClick={handleCancelDelete}
+                disabled={isDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-delete-confirm"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+              >
+                {isDeleting ? (
+                  <>
+                    <span className="spinner-inline" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={14} />
+                    Delete
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

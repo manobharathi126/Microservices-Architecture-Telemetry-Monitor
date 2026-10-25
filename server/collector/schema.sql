@@ -41,3 +41,36 @@ CREATE TABLE IF NOT EXISTS spans (
   FOREIGN KEY (trace_id) REFERENCES traces(id) ON DELETE CASCADE,
   FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  service_id INT NULL,
+  service_name VARCHAR(255) NOT NULL,
+  severity ENUM('Critical', 'Warning', 'Info') NOT NULL DEFAULT 'Warning',
+  status ENUM('Active', 'Acknowledged', 'Resolved') NOT NULL DEFAULT 'Active',
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  message TEXT NOT NULL,
+  alert_type VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  acknowledged_at TIMESTAMP NULL,
+  resolved_at TIMESTAMP NULL,
+  read_at TIMESTAMP NULL,
+  INDEX idx_alert_status (status),
+  INDEX idx_alert_is_read (is_read),
+  INDEX idx_alert_service (service_id)
+);
+
+CREATE TABLE IF NOT EXISTS logs (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  service_id INT NULL,
+  service_name VARCHAR(255) NOT NULL,
+  level ENUM('INFO', 'WARN', 'ERROR', 'CRITICAL', 'DEBUG') NOT NULL DEFAULT 'INFO',
+  message TEXT NOT NULL,
+  source VARCHAR(50) NOT NULL DEFAULT 'health_check',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_log_time (created_at),
+  INDEX idx_log_level (level),
+  INDEX idx_log_service (service_id)
+);
+

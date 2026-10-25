@@ -1,10 +1,8 @@
 // ============================================================
 // Dashboard Page
 // ============================================================
-import { Link } from 'react-router-dom';
 import {
-  Server, Activity, Zap, Clock, AlertTriangle,
-  Cpu, HardDrive, Wifi, TrendingUp, CheckCircle
+  Server, Activity, Zap, Clock, AlertTriangle
 } from 'lucide-react';
 import StatsCard from '../components/StatsCard';
 import { LatencyTrendChart, AvailabilityChart, ServicePieChart } from '../components/Charts';
@@ -14,9 +12,8 @@ import '../css/Dashboard.css';
 
 /**
  * Main Dashboard page — shows system overview, stats, and key charts.
- * Everything here — stats grid, services list, pie chart, and now the
- * latency/memory trend charts — is computed live from the collector's
- * WebSocket feed (useTelemetry) instead of dummyData.
+ * Everything here — stats grid, pie chart, and the latency/uptime charts —
+ * is computed live from the collector's WebSocket feed (useTelemetry).
  */
 const Dashboard = () => {
   const { services: servicesData, latencyChartData, uptimeChartData, connectionStatus } = useTelemetry();
@@ -27,13 +24,7 @@ const Dashboard = () => {
   // Compute aggregate stats live from whatever services are currently
   // reporting, instead of reading a hardcoded dashboardStats object.
   const totalServices = servicesData.length;
-  const activeServices = servicesData.filter(s => s.status !== 'Down').length;
   const downServices = servicesData.filter(s => s.status === 'Down').length;
-
-  const simulatedWithCpu = servicesData.filter(s => s.type !== 'real' && s.cpu != null);
-  const avgCpu = simulatedWithCpu.length
-    ? Math.round(simulatedWithCpu.reduce((sum, s) => sum + s.cpu, 0) / simulatedWithCpu.length)
-    : 0;
 
   const servicesWithLatency = servicesData.filter(s => s.avgLatency != null);
   const avgLatency = servicesWithLatency.length
@@ -44,10 +35,8 @@ const Dashboard = () => {
 
   const stats = {
     totalServices,
-    activeServices,
     avgResponseTime: avgLatency,
     errorRate,
-    cpuUsage: avgCpu,
   };
 
   // Live pie chart data, replacing the hardcoded pieData import
@@ -101,21 +90,12 @@ const Dashboard = () => {
           animationDelay={0}
         />
         <StatsCard
-          icon={<CheckCircle size={20} />}
-          label="Active Services"
-          value={stats.activeServices}
-          color="green"
-          trend="neutral"
-          trendValue={`${stats.activeServices}/${stats.totalServices}`}
-          animationDelay={60}
-        />
-        <StatsCard
           icon={<Activity size={20} />}
           label="Real Services"
           value={servicesData.filter(s => s.type === 'real').length}
           color="cyan"
           trend="neutral"
-          animationDelay={120}
+          animationDelay={60}
         />
         <StatsCard
           icon={<Zap size={20} />}
@@ -123,7 +103,7 @@ const Dashboard = () => {
           value={servicesData.filter(s => s.type !== 'real').length}
           color="primary"
           trend="neutral"
-          animationDelay={180}
+          animationDelay={120}
         />
         <StatsCard
           icon={<Clock size={20} />}
@@ -133,7 +113,7 @@ const Dashboard = () => {
           color="orange"
           trend="down"
           trendValue="-12ms"
-          animationDelay={240}
+          animationDelay={180}
         />
         <StatsCard
           icon={<AlertTriangle size={20} />}
@@ -143,17 +123,7 @@ const Dashboard = () => {
           color="red"
           trend="down"
           trendValue="-0.3%"
-          animationDelay={300}
-        />
-        <StatsCard
-          icon={<Cpu size={20} />}
-          label="CPU Usage"
-          value={stats.cpuUsage}
-          unit="%"
-          color="purple"
-          progress={stats.cpuUsage}
-          trend="neutral"
-          animationDelay={360}
+          animationDelay={240}
         />
         <StatsCard
           icon={<AlertTriangle size={20} />}
@@ -161,16 +131,11 @@ const Dashboard = () => {
           value={downServices}
           color={downServices > 0 ? 'red' : 'green'}
           trend="neutral"
-          animationDelay={420}
+          animationDelay={300}
         />
       </div>
 
-      {/* Charts — all live now, sourced from useTelemetry's rolling
-          history rather than dummyData. Two panels (a fixed "Request
-          Trends" count and true P95/P99 percentiles) were removed
-          since we genuinely don't have request-count or large-enough
-          sample sizes to compute those honestly yet — that needs
-          Week 5's multi-service expansion and a longer history window. */}
+      {/* Charts — all live now, sourced from useTelemetry's rolling history */}
       <div className="charts-grid">
         <div className="chart-card full-width">
           <div className="chart-header">
@@ -208,7 +173,7 @@ const Dashboard = () => {
           )}
         </div>
 
-        <div className="chart-card">
+        <div className="chart-card full-width">
           <div className="chart-header">
             <div>
               <div className="chart-title">Service Health Distribution</div>
@@ -216,41 +181,6 @@ const Dashboard = () => {
             </div>
           </div>
           <ServicePieChart data={livePieData} />
-        </div>
-      </div>
-
-      {/* Services Overview */}
-      <div className="chart-card" style={{ marginBottom: 0 }}>
-        <div className="chart-header" style={{ marginBottom: 16 }}>
-          <div>
-            <div className="chart-title">Services Overview</div>
-            <div className="chart-subtitle">Quick status of all microservices</div>
-          </div>
-          <Link to="/services" style={{ fontSize: '0.8rem', color: 'var(--accent-primary)', textDecoration: 'none' }}>
-            View All →
-          </Link>
-        </div>
-        <div className="services-overview">
-          {servicesData.map((service) => {
-            const dotColor = service.status === 'Healthy' ? 'var(--status-healthy)' : service.status === 'Warning' ? 'var(--status-warning)' : 'var(--status-error)';
-            return (
-              <Link key={service.id} to={`/services/${service.id}`} className="service-mini-card">
-                <div className="service-mini-dot" style={{ background: dotColor }} />
-                <div className="service-mini-info">
-                  <div className="service-mini-name">
-                    {service.name}
-                    {service.type === 'real' && (
-                      <span style={{ marginLeft: 6, fontSize: '0.6rem', color: '#60a5fa' }}>REAL</span>
-                    )}
-                  </div>
-                  <div className="service-mini-stat">
-                    {service.avgLatency != null ? `${Math.round(service.avgLatency)}ms` : '—'}
-                    {service.cpu != null ? ` · ${Math.round(service.cpu)}% CPU` : ''}
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
         </div>
       </div>
     </div>

@@ -1,49 +1,156 @@
 // ============================================================
-// Alerts Page
+// Alerts Page — Connected to Real Persistence & Alert Engine
 // ============================================================
-import { useState, useMemo, useEffect } from 'react';
-import { Search, AlertCircle, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { alertsData } from '../data/dummyData';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { Search, AlertCircle, AlertTriangle, CheckCircle2, RefreshCw, Check } from 'lucide-react';
+import { fetchAlerts, fetchAlertsSummary, acknowledgeAlert, resolveAlert } from '../utils/api';
 import '../css/Pages.css';
 import toast from 'react-hot-toast';
 
-const SEVERITIES = ['All', 'Critical', 'Warning', 'Healthy'];
+const SEVERITIES = ['All', 'Critical', 'Warning', 'Info'];
 const STATUSES = ['All', 'Active', 'Acknowledged', 'Resolved'];
 
 /**
- * Alerts management page with color-coded severity and status filters
+ * Alerts management page with real backend persistence and state evaluation
  */
 const Alerts = () => {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [alerts, setAlerts] = useState([]);
+  const [summary, setSummary] = useState({
+    total: 0,
+    active: 0,
+    acknowledged: 0,
+    resolved: 0,
+    critical: 0,
+    warning: 0,
+    info: 0,
+  });
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [actionPending, setActionPending] = useState({});
+
+  const loadAlertsData = useCallback(async (isInitial = false) => {
+    if (isInitial) setLoading(true);
+    try {
+      const [alertsData, summaryData] = await Promise.all([
+        fetchAlerts({
+          status: statusFilter,
+          severity: severityFilter,
+          search,
+        }),
+        fetchAlertsSummary(),
+      ]);
+
+      setAlerts(alertsData || []);
+      if (summaryData) setSummary(summaryData);
+      setError(null);
+    } catch (err) {
+      console.error('[Alerts] Failed to fetch alerts:', err);
+      if (isInitial || alerts.length === 0) {
+        setError(err.message || 'Unable to retrieve alerts from collector.');
+      }
+    } finally {
+      if (isInitial) setLoading(false);
+    }
+  }, [statusFilter, severityFilter, search, alerts.length]);
 
   useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 700);
-    return () => clearTimeout(t);
-  }, []);
+    loadAlertsData(true);
+  }, [statusFilter, severityFilter, search]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-refresh alerts every 6 seconds to track active failures and recoveries
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadAlertsData(false);
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [loadAlertsData]);
+
+  // Synchronize immediately on cross-component alert events (e.g. mark all read in Navbar)
+  useEffect(() => {
+    const handleUpdate = () => loadAlertsData(false);
+    window.addEventListener('alert_updated', handleUpdate);
+    return () => window.removeEventListener('alert_updated', handleUpdate);
+  }, [loadAlertsData]);
+
+  const handleAcknowledge = async (id) => {
+    setActionPending((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await acknowledgeAlert(id);
+      if (res && res.ok) {
+        setAlerts((prev) =>
+          prev.map((a) => (a.id === id ? { ...a, status: 'Acknowledged' } : a))
+        );
+        setSummary((prev) => ({
+          ...prev,
+          active: Math.max(0, prev.active - 1),
+          acknowledged: prev.acknowledged + 1,
+        }));
+        window.dispatchEvent(new CustomEvent('alert_updated'));
+        toast.success(`Alert #${id} acknowledged`, {
+          style: {
+            background: 'var(--bg-card)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-hover)',
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to acknowledge alert:', err);
+      toast.error(err.message || 'Failed to acknowledge alert', {
+        style: {
+          background: 'var(--bg-card)',
+          color: 'var(--status-error)',
+          border: '1px solid var(--border-hover)',
+        },
+      });
+    } finally {
+      setActionPending((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handleResolve = async (id) => {
+    setActionPending((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await resolveAlert(id);
+      if (res && res.ok) {
+        setAlerts((prev) =>
+          prev.map((a) => (a.id === id ? { ...a, status: 'Resolved' } : a))
+        );
+        setSummary((prev) => ({
+          ...prev,
+          acknowledged: Math.max(0, prev.acknowledged - 1),
+          resolved: prev.resolved + 1,
+        }));
+        window.dispatchEvent(new CustomEvent('alert_updated'));
+        toast.success(`Alert #${id} resolved`, {
+          style: {
+            background: 'var(--bg-card)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-hover)',
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to resolve alert:', err);
+      toast.error(err.message || 'Failed to resolve alert');
+    } finally {
+      setActionPending((prev) => ({ ...prev, [id]: false }));
+    }
+  };
 
   const filtered = useMemo(() => {
-    return alertsData.filter((a) => {
-      const matchSearch = a.message.toLowerCase().includes(search.toLowerCase()) ||
-        a.service.toLowerCase().includes(search.toLowerCase());
+    return alerts.filter((a) => {
+      const matchSearch =
+        (a.message && a.message.toLowerCase().includes(search.toLowerCase())) ||
+        (a.service && a.service.toLowerCase().includes(search.toLowerCase()));
       const matchSeverity = severityFilter === 'All' || a.severity === severityFilter;
       const matchStatus = statusFilter === 'All' || a.status === statusFilter;
       return matchSearch && matchSeverity && matchStatus;
     });
-  }, [search, severityFilter, statusFilter]);
-
-  const counts = useMemo(() => ({
-    total: alertsData.length,
-    critical: alertsData.filter(a => a.severity === 'Critical').length,
-    warning: alertsData.filter(a => a.severity === 'Warning').length,
-    active: alertsData.filter(a => a.status === 'Active').length,
-  }), []);
-
-  const handleAcknowledge = (id) => {
-    toast.success('Alert acknowledged', { style: { background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-hover)' } });
-  };
+  }, [alerts, search, severityFilter, statusFilter]);
 
   const SeverityIcon = ({ severity }) => {
     if (severity === 'Critical') return <AlertCircle size={13} />;
@@ -56,25 +163,58 @@ const Alerts = () => {
       <div className="page-header">
         <div>
           <h2 className="page-title">Alerts</h2>
-          <p className="page-subtitle">Active alerts and incident management</p>
+          <p className="page-subtitle">Real-time incident management driven by collector threshold evaluation</p>
         </div>
+        <button
+          onClick={() => loadAlertsData(false)}
+          title="Refresh alerts"
+          style={{
+            padding: '6px 12px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-secondary)',
+            background: 'var(--bg-card)',
+            color: 'var(--text-muted)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: '0.8rem',
+          }}
+        >
+          <RefreshCw size={13} />
+          <span>Refresh</span>
+        </button>
       </div>
 
-      {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 20 }}>
+      {/* Summary cards calculated dynamically */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+          gap: 12,
+          marginBottom: 20,
+        }}
+      >
         {[
-          { label: 'Total Alerts', value: counts.total, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
-          { label: 'Critical', value: counts.critical, color: 'var(--status-error)', bg: 'rgba(239,68,68,0.1)' },
-          { label: 'Warning', value: counts.warning, color: 'var(--status-warning)', bg: 'rgba(245,158,11,0.1)' },
-          { label: 'Active', value: counts.active, color: 'var(--status-error)', bg: 'rgba(239,68,68,0.08)' },
+          { label: 'Total Incidents', value: summary.total, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
+          { label: 'Active Alerts', value: summary.active, color: 'var(--status-error)', bg: 'rgba(239,68,68,0.08)' },
+          { label: 'Acknowledged', value: summary.acknowledged, color: 'var(--accent-primary)', bg: 'rgba(99,102,241,0.1)' },
+          { label: 'Critical Outages', value: summary.critical, color: 'var(--status-error)', bg: 'rgba(239,68,68,0.1)' },
+          { label: 'Latency Warnings', value: summary.warning, color: 'var(--status-warning)', bg: 'rgba(245,158,11,0.1)' },
+          { label: 'Resolved', value: summary.resolved, color: 'var(--status-healthy)', bg: 'rgba(16,185,129,0.08)' },
         ].map((s, i) => (
-          <div key={i} style={{
-            background: s.bg,
-            border: '1px solid var(--border-secondary)',
-            borderRadius: 'var(--radius-md)',
-            padding: '14px 16px',
-          }}>
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: s.color, fontFamily: 'var(--font-mono)' }}>{s.value}</div>
+          <div
+            key={i}
+            style={{
+              background: s.bg,
+              border: '1px solid var(--border-secondary)',
+              borderRadius: 'var(--radius-md)',
+              padding: '14px 16px',
+            }}
+          >
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: s.color, fontFamily: 'var(--font-mono)' }}>
+              {s.value}
+            </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>{s.label}</div>
           </div>
         ))}
@@ -88,7 +228,7 @@ const Alerts = () => {
           <input
             className="search-input"
             style={{ paddingLeft: 40, maxWidth: '100%', width: '100%' }}
-            placeholder="Search alerts..."
+            placeholder="Search alerts by service or message..."
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -104,6 +244,41 @@ const Alerts = () => {
           {STATUSES.map(s => <option key={s} value={s}>{s === 'All' ? 'All Statuses' : s}</option>)}
         </select>
       </div>
+
+      {/* Error state */}
+      {error && (
+        <div style={{
+          padding: '16px 20px',
+          background: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          borderRadius: 'var(--radius-md)',
+          marginBottom: 16,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          color: 'var(--status-error)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AlertCircle size={18} />
+            <span style={{ fontSize: '0.875rem' }}>{error}</span>
+          </div>
+          <button
+            onClick={() => loadAlertsData(true)}
+            style={{
+              padding: '4px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              background: 'transparent',
+              color: 'var(--status-error)',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Alerts Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -121,7 +296,7 @@ const Alerts = () => {
             </thead>
             <tbody>
               {loading ? (
-                Array(8).fill(null).map((_, i) => (
+                Array(6).fill(null).map((_, i) => (
                   <tr key={i}>
                     {Array(6).fill(null).map((_, j) => (
                       <td key={j} style={{ padding: '14px 16px' }}>
@@ -133,30 +308,44 @@ const Alerts = () => {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>
-                    No alerts match your filters
+                    No alerts match your current filters. Monitored services are operating within normal parameters.
                   </td>
                 </tr>
               ) : (
                 filtered.map((alert) => (
-                  <tr key={alert.id} style={{
-                    borderLeft: `2px solid ${alert.severity === 'Critical' ? 'var(--status-error)' : alert.severity === 'Warning' ? 'var(--status-warning)' : 'var(--status-healthy)'}`,
-                  }}>
+                  <tr
+                    key={alert.id}
+                    style={{
+                      borderLeft: `2px solid ${
+                        alert.severity === 'Critical'
+                          ? 'var(--status-error)'
+                          : alert.severity === 'Warning'
+                          ? 'var(--status-warning)'
+                          : 'var(--status-healthy)'
+                      }`,
+                    }}
+                  >
                     <td>
-                      <span className={`severity-badge ${alert.severity.toLowerCase()}`}>
+                      <span className={`severity-badge ${alert.severity ? alert.severity.toLowerCase() : 'warning'}`}>
                         <SeverityIcon severity={alert.severity} />
                         {alert.severity}
                       </span>
                     </td>
                     <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{alert.service}</td>
                     <td style={{ color: 'var(--text-secondary)', maxWidth: 320 }}>{alert.message}</td>
-                    <td style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '0.78rem' }}>{alert.time}</td>
-                    <td>
-                      <span className={`alert-status-badge ${alert.status.toLowerCase()}`}>{alert.status}</span>
+                    <td style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                      {alert.time}
                     </td>
                     <td>
-                      {alert.status === 'Active' && (
+                      <span className={`alert-status-badge ${alert.status ? alert.status.toLowerCase() : 'active'}`}>
+                        {alert.status}
+                      </span>
+                    </td>
+                    <td>
+                      {alert.status === 'Active' ? (
                         <button
                           onClick={() => handleAcknowledge(alert.id)}
+                          disabled={actionPending[alert.id]}
                           style={{
                             padding: '4px 10px',
                             background: 'rgba(99,102,241,0.15)',
@@ -165,13 +354,39 @@ const Alerts = () => {
                             color: 'var(--accent-primary)',
                             fontSize: '0.72rem',
                             fontWeight: 600,
-                            cursor: 'pointer',
+                            cursor: actionPending[alert.id] ? 'not-allowed' : 'pointer',
+                            opacity: actionPending[alert.id] ? 0.6 : 1,
                             transition: 'all 0.2s',
                             fontFamily: 'var(--font-sans)',
                           }}
                         >
-                          Acknowledge
+                          {actionPending[alert.id] ? 'Saving...' : 'Acknowledge'}
                         </button>
+                      ) : alert.status === 'Acknowledged' ? (
+                        <button
+                          onClick={() => handleResolve(alert.id)}
+                          disabled={actionPending[alert.id]}
+                          style={{
+                            padding: '4px 10px',
+                            background: 'rgba(16,185,129,0.15)',
+                            border: '1px solid rgba(16,185,129,0.3)',
+                            borderRadius: 'var(--radius-sm)',
+                            color: 'var(--status-healthy)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            cursor: actionPending[alert.id] ? 'not-allowed' : 'pointer',
+                            opacity: actionPending[alert.id] ? 0.6 : 1,
+                            transition: 'all 0.2s',
+                            fontFamily: 'var(--font-sans)',
+                          }}
+                        >
+                          {actionPending[alert.id] ? 'Saving...' : 'Resolve'}
+                        </button>
+                      ) : (
+                        <span style={{ color: 'var(--status-healthy)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Check size={13} />
+                          Resolved
+                        </span>
                       )}
                     </td>
                   </tr>

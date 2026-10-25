@@ -77,12 +77,20 @@ export function useTelemetry() {
   const [traces, setTraces] = useState([]);
   const socketRef = useRef(null);
   const [addServiceStatus, setAddServiceStatus] = useState(null);
+  const pendingDeletePromises = useRef(new Map());
+  const deletedServiceIds = useRef(new Set());
 
   const applyTick = (tick) => {
     setServicesById((prev) => {
       const next = { ...prev };
       for (const reading of tick.readings) {
-        next[reading.serviceId] = normalizeReading(reading);
+        if (deletedServiceIds.current.has(reading.serviceId)) {
+          delete next[reading.serviceId];
+          continue;
+        }
+        if (next[reading.serviceId]) {
+          next[reading.serviceId] = normalizeReading(reading);
+        }
       }
       return next;
     });
@@ -103,29 +111,41 @@ export function useTelemetry() {
       const message = JSON.parse(event.data);
 
       if (message.kind === 'db_history') {
-        // Seed everything from the database — real persisted state,
-        // survives collector restarts, unlike the old in-memory version.
+        // Seed only legitimate services from the database
         const byId = {};
         for (const s of message.services) {
-          byId[s.id] = normalizeReading({ serviceId: s.id, service: s.name, status: 'healthy' });
+          if (!deletedServiceIds.current.has(s.id)) {
+            byId[s.id] = normalizeReading({ serviceId: s.id, service: s.name, status: 'healthy' });
+          }
         }
-        // Overlay each service's most recent actual reading, if we have one
+        // Overlay each registered service's most recent reading (DO NOT create phantom services from orphaned readings)
         const latestByService = {};
         for (const r of message.recentReadings) {
-          latestByService[r.service_id] = r; // recentReadings is ordered ASC, so last write wins = most recent
+          if (byId[r.service_id]) {
+            latestByService[r.service_id] = r;
+          }
         }
         for (const [id, r] of Object.entries(latestByService)) {
-          byId[id] = normalizeReading({
-            serviceId: Number(id),
-            service: r.service,
-            status: r.status,
-            latencyMs: r.latency_ms,
-            httpStatus: r.http_status,
-          });
+          if (byId[id]) {
+            byId[id] = normalizeReading({
+              serviceId: Number(id),
+              service: byId[id].name,
+              status: r.status,
+              latencyMs: r.latency_ms,
+              httpStatus: r.http_status,
+            });
+          }
         }
         setServicesById(byId);
         setUptimeChartData(message.uptimeStats);
-        setTraces(message.recentTraces);
+        // Deduplicate initial traces by ID
+        const seenTraceIds = new Set();
+        const initialTraces = (message.recentTraces || []).filter((t) => {
+          if (!t || !t.id || seenTraceIds.has(t.id)) return false;
+          seenTraceIds.add(t.id);
+          return true;
+        });
+        setTraces(initialTraces.slice(0, MAX_TRACES));
 
         // Rebuild recent latency chart points from persisted readings,
         // grouped by timestamp (rounded to the second) into ticks.
@@ -139,9 +159,51 @@ export function useTelemetry() {
       } else if (message.kind === 'tick') {
         applyTick(message);
       } else if (message.kind === 'trace') {
-        setTraces((prev) => [message.trace, ...prev].slice(0, MAX_TRACES));
+        if (message.trace && message.trace.id) {
+          setTraces((prev) => {
+            const filtered = prev.filter((t) => t.id !== message.trace.id);
+            return [message.trace, ...filtered].slice(0, MAX_TRACES);
+          });
+        }
       } else if (message.kind === 'add_service_result') {
         setAddServiceStatus(message);
+        if (message.ok && message.id) {
+          deletedServiceIds.current.delete(Number(message.id));
+        }
+      } else if (message.kind === 'service_deleted') {
+        const delId = Number(message.id);
+        deletedServiceIds.current.add(delId);
+        setServicesById((prev) => {
+          const next = { ...prev };
+          delete next[delId];
+          return next;
+        });
+      } else if (message.kind === 'delete_service_result') {
+        const pending = pendingDeletePromises.current.get(message.id);
+        if (pending) {
+          clearTimeout(pending.timeoutId);
+          pendingDeletePromises.current.delete(message.id);
+          if (message.ok) {
+            deletedServiceIds.current.add(Number(message.id));
+            setServicesById((prev) => {
+              const next = { ...prev };
+              delete next[message.id];
+              return next;
+            });
+            pending.resolve(message);
+          } else {
+            deletedServiceIds.current.delete(Number(message.id));
+            pending.reject(new Error(message.error || 'Failed to delete service.'));
+          }
+        }
+      } else if (
+        message.kind === 'new_alert' ||
+        message.kind === 'alert_resolved' ||
+        message.kind === 'alert_acknowledged' ||
+        message.kind === 'alert_read' ||
+        message.kind === 'alerts_all_read'
+      ) {
+        window.dispatchEvent(new CustomEvent('alert_updated', { detail: message }));
       }
     };
 
@@ -151,6 +213,12 @@ export function useTelemetry() {
 
     socket.onclose = () => {
       if (isCurrent) setConnectionStatus('disconnected');
+      // Reject any pending delete promises on disconnect
+      for (const [, pending] of pendingDeletePromises.current.entries()) {
+        clearTimeout(pending.timeoutId);
+        pending.reject(new Error('Collector connection closed before deletion completed.'));
+      }
+      pendingDeletePromises.current.clear();
     };
 
     return () => {
@@ -168,6 +236,36 @@ export function useTelemetry() {
     socketRef.current.send(JSON.stringify({ kind: 'add_service', name, url, serviceKind }));
   };
 
+  const deleteService = (id, name) => {
+    return new Promise((resolve, reject) => {
+      const numericId = Number(id);
+      if (!numericId) {
+        reject(new Error('Invalid service ID.'));
+        return;
+      }
+      if (!socketRef.current || socketRef.current.readyState !== 1) {
+        reject(new Error('Not connected to collector service. Please verify collector is running.'));
+        return;
+      }
+
+      deletedServiceIds.current.add(numericId);
+      setServicesById((prev) => {
+        const next = { ...prev };
+        delete next[numericId];
+        return next;
+      });
+
+      const timeoutId = setTimeout(() => {
+        pendingDeletePromises.current.delete(numericId);
+        deletedServiceIds.current.delete(numericId);
+        reject(new Error('Delete request timed out. Please try again.'));
+      }, 6000);
+
+      pendingDeletePromises.current.set(numericId, { resolve, reject, timeoutId });
+      socketRef.current.send(JSON.stringify({ kind: 'delete_service', id: numericId, name }));
+    });
+  };
+
   return {
     services: Object.values(servicesById),
     latencyChartData,
@@ -176,5 +274,6 @@ export function useTelemetry() {
     connectionStatus,
     addService,
     addServiceStatus,
+    deleteService,
   };
 }

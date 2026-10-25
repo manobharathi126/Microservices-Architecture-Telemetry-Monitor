@@ -16,15 +16,15 @@ const navItems = [
   { path: '/tracing', icon: GitBranch, label: 'Distributed Tracing', section: 'OBSERVABILITY' },
   { path: '/analytics', icon: BarChart3, label: 'Analytics', section: 'OBSERVABILITY' },
   { path: '/logs', icon: FileText, label: 'Logs', section: 'OBSERVABILITY' },
-  { path: '/alerts', icon: Bell, label: 'Alerts', badge: '4', section: 'OBSERVABILITY' },
+  { path: '/alerts', icon: Bell, label: 'Alerts', section: 'OBSERVABILITY' },
   { path: '/settings', icon: Settings, label: 'Settings', section: 'CONFIG' },
 ];
 
 /**
  * Sidebar navigation component with collapsible support
- * @param {Object} props - collapsed, onToggle, mobileOpen, onMobileClose
+ * @param {Object} props - collapsed, onToggle, mobileOpen, onMobileClose, alertsCount
  */
-const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose }) => {
+const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose, alertsCount = 0 }) => {
   let lastSection = null;
 
   return (
@@ -53,6 +53,7 @@ const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose }) => {
             const showSection = item.section !== lastSection;
             lastSection = item.section;
             const Icon = item.icon;
+            const badgeValue = item.path === '/alerts' && alertsCount > 0 ? alertsCount : null;
 
             return (
               <div key={item.path}>
@@ -69,8 +70,8 @@ const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose }) => {
                     <Icon size={18} />
                   </span>
                   <span className="nav-label">{item.label}</span>
-                  {item.badge && (
-                    <span className="nav-badge">{item.badge}</span>
+                  {badgeValue != null && (
+                    <span className="nav-badge">{badgeValue}</span>
                   )}
                 </NavLink>
               </div>
@@ -80,8 +81,17 @@ const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose }) => {
 
         {/* Status */}
         <div className="sidebar-footer">
-          <div className="sidebar-status-dot" />
-          <span className="sidebar-status-text">All systems nominal</span>
+          <div
+            className="sidebar-status-dot"
+            style={{
+              background: alertsCount > 0 ? 'var(--status-warning)' : 'var(--status-healthy)',
+            }}
+          />
+          <span className="sidebar-status-text">
+            {alertsCount > 0
+              ? `${alertsCount} active incident${alertsCount > 1 ? 's' : ''}`
+              : 'All systems nominal'}
+          </span>
         </div>
 
         {/* Toggle Button */}

@@ -508,3 +508,24 @@ input, select, textarea {
     padding: 16px;
   }
 }
+
+/* ============================================================
+   Appearance Options: Animations & Density
+   ============================================================ */
+body.no-animations *,
+body.no-animations *::before,
+body.no-animations *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+body.compact-mode .card,
+body.compact-mode .page-header,
+body.compact-mode .settings-panel {
+  padding: 14px 18px;
+}
+
+body.compact-mode .settings-row {
+  padding: 8px 0;
+}
+

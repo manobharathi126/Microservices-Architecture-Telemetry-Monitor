@@ -87,7 +87,18 @@ export default function Login() {
       // Store token and user profile
       localStorage.setItem('authToken', data.token);
       if (data.user) {
-        localStorage.setItem('authUser', JSON.stringify(data.user));
+        let userProfile = data.user;
+        try {
+          const savedOverride = localStorage.getItem(`user_profile_${userProfile.email.toLowerCase()}`);
+          if (savedOverride) {
+            const parsed = JSON.parse(savedOverride);
+            userProfile = { ...userProfile, ...parsed };
+          }
+        } catch {
+          // Ignore JSON parse errors
+        }
+        localStorage.setItem('authUser', JSON.stringify(userProfile));
+        window.dispatchEvent(new CustomEvent('auth_user_updated', { detail: userProfile }));
       }
       toast.success('Logged in successfully');
       navigate(from, { replace: true });

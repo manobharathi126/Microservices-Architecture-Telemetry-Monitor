@@ -50,6 +50,7 @@ const PageLoader = () => (
 function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [alertsCount, setAlertsCount] = useState(0);
   const location = useLocation();
   const isLoginPage = location.pathname === '/login';
 
@@ -72,6 +73,7 @@ function AppLayout() {
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         mobileOpen={mobileMenuOpen}
         onMobileClose={() => setMobileMenuOpen(false)}
+        alertsCount={alertsCount}
       />
 
       {/* Main Content */}
@@ -80,6 +82,7 @@ function AppLayout() {
         <Navbar
           collapsed={sidebarCollapsed}
           onMobileMenuOpen={() => setMobileMenuOpen(true)}
+          onAlertsCountChange={setAlertsCount}
         />
 
         {/* Page Content */}

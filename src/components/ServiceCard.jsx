@@ -2,14 +2,16 @@
 // ServiceCard Component — Card for each microservice
 // ============================================================
 import { Link } from 'react-router-dom';
-import { Clock, Activity, AlertCircle, Cpu, HardDrive } from 'lucide-react';
+import { Clock, Activity, AlertCircle, Cpu, HardDrive, Trash2 } from 'lucide-react';
 import '../css/Services.css';
 
 /**
  * Displays a microservice card with metrics and status
  * @param {Object} props.service - Service data object
+ * @param {number} [props.index] - Index for staggered animations
+ * @param {Function} [props.onDelete] - Callback when user clicks delete button
  */
-const ServiceCard = ({ service, index = 0 }) => {
+const ServiceCard = ({ service, index = 0, onDelete }) => {
   const statusClass = service.status.toLowerCase();
   // Real (external) services don't report CPU/memory — we can't
   // observe another site's internals, so we only show what we
@@ -58,9 +60,26 @@ const ServiceCard = ({ service, index = 0 }) => {
             {service.host ? `${service.host}:${service.port}` : (isReal ? 'external service' : '—')}
           </div>
         </div>
-        <span className={`badge badge-${statusClass}`}>
-          {service.status}
-        </span>
+        <div className="service-card-header-actions">
+          <span className={`badge badge-${statusClass}`}>
+            {service.status}
+          </span>
+          {onDelete && !service.isProtected && (
+            <button
+              type="button"
+              className="service-delete-btn"
+              title="Delete service"
+              aria-label={`Delete service ${service.name}`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete(service);
+              }}
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Metrics Grid */}
