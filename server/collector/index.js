@@ -12,7 +12,42 @@
 
 const http = require('http');
 const { WebSocketServer } = require('ws');
+const jwt = require('jsonwebtoken');
 const db = require('./db');
+const { verifyServiceUrl } = require('./serviceValidator');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
+
+/**
+ * Verify JWT token from Authorization header.
+ * Strictly verifies cryptographic signature using JWT_SECRET.
+ * Never trusts unauthenticated or client-supplied identities.
+ */
+function authenticateRequest(req) {
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+  if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+    return { ok: false, error: 'Authentication required. No Bearer token provided.', code: 401 };
+  }
+  const token = authHeader.slice(7).trim();
+  if (!token) {
+    return { ok: false, error: 'Authentication token is empty.', code: 401 };
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (!decoded || (!decoded.email && !decoded.name)) {
+      return { ok: false, error: 'Invalid token payload.', code: 401 };
+    }
+    const user = {
+      id: String(decoded.id || decoded.email || decoded.name),
+      name: String(decoded.name || decoded.email || 'User'),
+      email: String(decoded.email || ''),
+      role: String(decoded.role || 'Member'),
+    };
+    return { ok: true, user };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Invalid or expired authentication token.', code: 401 };
+  }
+}
 
 const POLL_INTERVAL_MS = 3000;
 const WEBSOCKET_PORT = Number(process.env.PORT) || 6001;
@@ -480,9 +515,16 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && pathname.startsWith('/api/alerts/') && pathname.endsWith('/ack')) {
+    const auth = authenticateRequest(req);
+    if (!auth.ok) {
+      res.writeHead(auth.code || 401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: auth.error }));
+      return;
+    }
+
     const parts = pathname.split('/');
     const id = parts[3];
-    db.acknowledgeAlert(id)
+    db.acknowledgeAlert(id, auth.user)
       .then((alert) => {
         if (!alert) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -553,6 +595,152 @@ const server = http.createServer((req, res) => {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: err.message }));
       });
+    return;
+  }
+
+  // HTTP POST endpoint to verify a service URL without saving
+  if (req.method === 'POST' && pathname === '/api/services/verify') {
+    readJsonBody().then(async (body) => {
+      const { url } = body || {};
+      if (!url || typeof url !== 'string' || !url.trim()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Please enter a valid HTTP or HTTPS URL.' }));
+        return;
+      }
+      const verifyResult = await verifyServiceUrl(url);
+      if (!verifyResult.ok) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: verifyResult.error }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: true,
+        normalizedUrl: verifyResult.normalizedUrl,
+        httpStatus: verifyResult.httpStatus,
+        latencyMs: verifyResult.latencyMs,
+      }));
+    }).catch(err => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    });
+    return;
+  }
+
+  // HTTP POST endpoint to create and verify a new service
+  if (req.method === 'POST' && (pathname === '/api/services' || pathname === '/api/services/')) {
+    if (process.env.READ_ONLY_DEMO === 'true') {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'This shared demo is read-only.' }));
+      return;
+    }
+    readJsonBody().then(async (body) => {
+      const { name, url, kind = 'ping' } = body || {};
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Service name is required.' }));
+        return;
+      }
+      if (!url || typeof url !== 'string' || !url.trim()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Please enter a valid HTTP or HTTPS URL.' }));
+        return;
+      }
+
+      const verifyResult = await verifyServiceUrl(url);
+      if (!verifyResult.ok) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: verifyResult.error }));
+        return;
+      }
+
+      const normalizedUrl = verifyResult.normalizedUrl || url.trim();
+      if (await db.serviceUrlExists(normalizedUrl)) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'That URL is already being monitored.' }));
+        return;
+      }
+
+      const service = await db.insertService(name.trim(), normalizedUrl, kind === 'statuspage' ? 'statuspage' : 'ping');
+      console.log(`[collector] created service via HTTP (id=${service.id}): ${name} (${normalizedUrl})`);
+      broadcast({ kind: 'new_service', service });
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: true,
+        service,
+        verification: {
+          httpStatus: verifyResult.httpStatus,
+          latencyMs: verifyResult.latencyMs,
+        },
+      }));
+    }).catch(err => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    });
+    return;
+  }
+
+  // HTTP PUT endpoint to update an existing service (validates/verifies URL if changed)
+  if (req.method === 'PUT' && pathname.startsWith('/api/services/')) {
+    if (process.env.READ_ONLY_DEMO === 'true') {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'This shared demo is read-only.' }));
+      return;
+    }
+    const idStr = pathname.split('/api/services/')[1];
+    const numericId = Number(idStr);
+    if (!numericId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Invalid service ID.' }));
+      return;
+    }
+
+    readJsonBody().then(async (body) => {
+      const { name, url, kind } = body || {};
+      let normalizedUrl = undefined;
+
+      if (url !== undefined) {
+        if (!url || typeof url !== 'string' || !url.trim()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Please enter a valid HTTP or HTTPS URL.' }));
+          return;
+        }
+
+        const verifyResult = await verifyServiceUrl(url);
+        if (!verifyResult.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: verifyResult.error }));
+          return;
+        }
+
+        normalizedUrl = verifyResult.normalizedUrl || url.trim();
+        if (await db.serviceUrlExists(normalizedUrl, numericId)) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'That URL is already being monitored.' }));
+          return;
+        }
+      }
+
+      const updated = await db.updateService(numericId, {
+        name: name ? name.trim() : undefined,
+        url: normalizedUrl,
+        kind,
+      });
+
+      if (!updated) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Service not found.' }));
+        return;
+      }
+
+      console.log(`[collector] updated service via HTTP (id=${numericId})`);
+      broadcast({ kind: 'service_updated', service: updated });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, service: updated }));
+    }).catch(err => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    });
     return;
   }
 
@@ -670,16 +858,43 @@ wss.on('connection', (ws) => {
         return;
       }
       const { name, url, serviceKind } = msg;
-      if (!name || !url) return;
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        ws.send(JSON.stringify({ kind: 'add_service_result', ok: false, error: 'Service name is required.' }));
+        return;
+      }
+      if (!url || typeof url !== 'string' || !url.trim()) {
+        ws.send(JSON.stringify({ kind: 'add_service_result', ok: false, error: 'Please enter a valid HTTP or HTTPS URL.' }));
+        return;
+      }
 
       try {
-        if (await db.serviceUrlExists(url)) {
+        // Enforce strict SSRF protection, URL validation, and live connectivity verification
+        const verifyResult = await verifyServiceUrl(url);
+        if (!verifyResult.ok) {
+          ws.send(JSON.stringify({ kind: 'add_service_result', ok: false, error: verifyResult.error }));
+          return;
+        }
+
+        const normalizedUrl = verifyResult.normalizedUrl || url.trim();
+
+        if (await db.serviceUrlExists(normalizedUrl)) {
           ws.send(JSON.stringify({ kind: 'add_service_result', ok: false, error: 'That URL is already being monitored.' }));
           return;
         }
-        const service = await db.insertService(name, url, serviceKind === 'statuspage' ? 'statuspage' : 'ping');
-        console.log(`[collector] added new service (id=${service.id}): ${name} (${url})`);
-        ws.send(JSON.stringify({ kind: 'add_service_result', ok: true, name, id: service.id }));
+
+        const kind = serviceKind === 'statuspage' ? 'statuspage' : 'ping';
+        const service = await db.insertService(name.trim(), normalizedUrl, kind);
+        console.log(`[collector] verified and added service (id=${service.id}): ${name} (${normalizedUrl})`);
+        ws.send(JSON.stringify({
+          kind: 'add_service_result',
+          ok: true,
+          name: service.name,
+          id: service.id,
+          url: service.url,
+          httpStatus: verifyResult.httpStatus,
+          latencyMs: verifyResult.latencyMs,
+        }));
+        broadcast({ kind: 'new_service', service });
       } catch (err) {
         ws.send(JSON.stringify({ kind: 'add_service_result', ok: false, error: err.message }));
       }

@@ -359,6 +359,11 @@ const ServiceDetails = () => {
                       <div className="alert-item-msg">{alert.message}</div>
                       <div className="alert-item-time">
                         {alert.severity} · {alert.time} ({alert.status})
+                        {alert.status === 'Acknowledged' && (alert.acknowledgedByName || alert.acknowledgedBy) && (
+                          <span style={{ marginLeft: 6, color: 'var(--accent-primary)', fontWeight: 600 }}>
+                            · Ack by {alert.acknowledgedByName || alert.acknowledgedBy}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>

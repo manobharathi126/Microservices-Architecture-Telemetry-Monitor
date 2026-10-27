@@ -42,6 +42,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
 // Authorized users list — in-memory repository initialized with administrator and provisioned accounts
 const USERS = [
   {
+    id: 'user-admin',
     email: process.env.ADMIN_EMAIL || 'admin@example.com',
     passwordHash:
       process.env.ADMIN_PASSWORD_HASH ||
@@ -54,15 +55,24 @@ const USERS = [
 // Seed accounts provisioned with precomputed bcrypt hashes (10 rounds)
 const SEED_USERS = [
   {
+    id: 'user-mathan',
     email: 'mathan@gmail.com',
     passwordHash: '$2a$10$F0sOlkAQjrR5aQW0VZ583e92Ph3ZrgZn9CcDxvGx73wjKXE7ALPfW',
     name: 'Mathan',
     role: 'Engineer',
   },
   {
+    id: 'user-vaishak',
     email: 'vaishak@gmail.com',
     passwordHash: '$2a$10$a1PaYPrJ/lC13ch2uRd4zuQ6koRv2J6xYEnmD08Ip0nqzrgaCXqya',
     name: 'Vaishak',
+    role: 'Engineer',
+  },
+  {
+    id: 'user-mano',
+    email: 'mano@gmail.com',
+    passwordHash: '$2a$10$agFIqXAdbjYl9v73NajzmuWVfAh9Q2c9cgYfIksCk4t7VeJjvl2K2',
+    name: 'Mano',
     role: 'Engineer',
   },
 ];
@@ -81,6 +91,7 @@ function seedAccounts(accountsToSeed = SEED_USERS) {
     );
     if (!exists) {
       USERS.push({
+        id: account.id || account.email.trim().toLowerCase(),
         email: account.email.trim().toLowerCase(),
         passwordHash: account.passwordHash,
         name: account.name,
@@ -141,7 +152,7 @@ app.post('/api/login', async (req, res) => {
 
     // Include profile data in JWT and response
     const token = jwt.sign(
-      { email: user.email, name: user.name, role: user.role },
+      { id: user.id || user.email, email: user.email, name: user.name, role: user.role },
       JWT_SECRET,
       { expiresIn: '8h' }
     );
@@ -150,6 +161,7 @@ app.post('/api/login', async (req, res) => {
     return res.status(200).json({
       token,
       user: {
+        id: user.id || user.email,
         email: user.email,
         name: user.name,
         role: user.role,
@@ -176,6 +188,7 @@ app.get('/api/me', (req, res) => {
     }
     return res.status(200).json({
       user: {
+        id: user.id || user.email,
         email: user.email,
         name: user.name,
         role: user.role,
@@ -208,7 +221,7 @@ app.put(['/api/profile', '/api/me'], (req, res) => {
     }
 
     const newToken = jwt.sign(
-      { email: user.email, name: user.name, role: user.role },
+      { id: user.id || user.email, email: user.email, name: user.name, role: user.role },
       JWT_SECRET,
       { expiresIn: '8h' }
     );
@@ -218,6 +231,7 @@ app.put(['/api/profile', '/api/me'], (req, res) => {
       message: 'Profile updated successfully',
       token: newToken,
       user: {
+        id: user.id || user.email,
         email: user.email,
         name: user.name,
         role: user.role,

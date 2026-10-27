@@ -31,6 +31,8 @@ const Services = () => {
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
   const [newKind, setNewKind] = useState('ping');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [clientValidationMsg, setClientValidationMsg] = useState(null);
   const [serviceToDelete, setServiceToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
@@ -53,20 +55,42 @@ const Services = () => {
   const loading = connectionStatus === 'connecting' && servicesData.length === 0;
 
   // When the collector confirms the add worked (or failed), clear the
-  // form on success and show the result either way.
+  // form only on success and preserve inputs on failure.
   useEffect(() => {
-    if (addServiceStatus?.ok) {
-      setNewName('');
-      setNewUrl('');
-      const t = setTimeout(() => setShowAddForm(false), 1200);
-      return () => clearTimeout(t);
+    if (addServiceStatus) {
+      setIsVerifying(false);
+      if (addServiceStatus.ok) {
+        setNewName('');
+        setNewUrl('');
+        setClientValidationMsg(null);
+        const t = setTimeout(() => setShowAddForm(false), 1500);
+        return () => clearTimeout(t);
+      }
     }
   }, [addServiceStatus]);
 
   const handleAddService = (e) => {
     e.preventDefault();
-    if (!newName.trim() || !newUrl.trim()) return;
-    addService(newName.trim(), newUrl.trim(), newKind);
+    setClientValidationMsg(null);
+
+    const nameTrimmed = newName.trim();
+    const urlTrimmed = newUrl.trim();
+
+    if (!nameTrimmed) {
+      setClientValidationMsg('Please enter a service name.');
+      return;
+    }
+    if (!urlTrimmed) {
+      setClientValidationMsg('Please enter a valid HTTP or HTTPS URL.');
+      return;
+    }
+    if (!/^https?:\/\//i.test(urlTrimmed)) {
+      setClientValidationMsg('Please enter a valid HTTP or HTTPS URL.');
+      return;
+    }
+
+    setIsVerifying(true);
+    addService(nameTrimmed, urlTrimmed, newKind);
   };
 
   const handleInitiateDelete = (service) => {
@@ -202,62 +226,125 @@ const Services = () => {
           }}
         >
           <input
+            id="service-name-input"
             type="text"
             placeholder="Display name (e.g. Discord Status)"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
+            disabled={isVerifying}
             required
             style={{
               flex: '1 1 200px', padding: '8px 12px', borderRadius: 8,
               border: '1px solid var(--border-secondary)', background: 'transparent',
               color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'var(--font-sans)',
+              opacity: isVerifying ? 0.6 : 1,
             }}
           />
           <input
-            type="url"
-            placeholder="https://example.com/api/status"
+            id="service-url-input"
+            type="text"
+            placeholder="https://status.example.com/api"
             value={newUrl}
             onChange={(e) => setNewUrl(e.target.value)}
+            disabled={isVerifying}
             required
             style={{
               flex: '2 1 280px', padding: '8px 12px', borderRadius: 8,
               border: '1px solid var(--border-secondary)', background: 'transparent',
               color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'var(--font-sans)',
+              opacity: isVerifying ? 0.6 : 1,
             }}
           />
           <select
+            id="service-kind-select"
             value={newKind}
             onChange={(e) => setNewKind(e.target.value)}
+            disabled={isVerifying}
             style={{
               padding: '8px 12px', borderRadius: 8,
               border: '1px solid var(--border-secondary)', background: 'transparent',
               color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'var(--font-sans)',
+              opacity: isVerifying ? 0.6 : 1,
             }}
           >
             <option value="ping">Plain ping (latency + HTTP status)</option>
             <option value="statuspage">Statuspage.io format (reads real status.indicator)</option>
           </select>
           <button
+            id="submit-service-btn"
             type="submit"
+            disabled={isVerifying}
             style={{
               padding: '8px 18px', borderRadius: 8, border: 'none',
-              background: 'var(--accent-primary)', color: '#fff',
-              fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-sans)',
+              background: isVerifying ? 'var(--text-muted)' : 'var(--accent-primary)',
+              color: '#fff',
+              fontSize: '0.85rem', fontWeight: 600,
+              cursor: isVerifying ? 'not-allowed' : 'pointer',
+              fontFamily: 'var(--font-sans)',
+              opacity: isVerifying ? 0.7 : 1,
+              transition: 'all 0.2s ease',
             }}
           >
-            Start Monitoring
+            {isVerifying ? 'Verifying...' : 'Start Monitoring'}
           </button>
 
-          {addServiceStatus && (
+          {/* Clear inline status feedback - no browser alert popups */}
+          {isVerifying && (
             <span
+              id="service-verifying-status"
               style={{
-                display: 'flex', alignItems: 'center', gap: 4,
-                fontSize: '0.8rem',
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: '0.82rem',
+                color: 'var(--accent-primary, #6366f1)',
+                padding: '4px 10px', borderRadius: 6,
+                background: 'rgba(99,102,241,0.08)',
+              }}
+            >
+              <span
+                style={{
+                  width: 12, height: 12,
+                  border: '2px solid currentColor',
+                  borderRightColor: 'transparent',
+                  borderRadius: '50%',
+                  display: 'inline-block',
+                  animation: 'spin 0.75s linear infinite',
+                }}
+              />
+              Verifying service connectivity...
+            </span>
+          )}
+
+          {!isVerifying && clientValidationMsg && (
+            <span
+              id="service-validation-error"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: '0.82rem',
+                color: 'var(--status-error, #ef4444)',
+                padding: '4px 10px', borderRadius: 6,
+                background: 'rgba(239,68,68,0.08)',
+              }}
+            >
+              <AlertCircle size={14} />
+              {clientValidationMsg}
+            </span>
+          )}
+
+          {!isVerifying && !clientValidationMsg && addServiceStatus && (
+            <span
+              id="service-add-result"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: '0.82rem',
                 color: addServiceStatus.ok ? 'var(--status-healthy, #10b981)' : 'var(--status-error, #ef4444)',
+                padding: '4px 10px', borderRadius: 6,
+                background: addServiceStatus.ok ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
               }}
             >
               {addServiceStatus.ok ? <Check size={14} /> : <AlertCircle size={14} />}
-              {addServiceStatus.ok ? `Now monitoring "${addServiceStatus.name}"` : addServiceStatus.error}
+              {addServiceStatus.ok
+                ? (addServiceStatus.name ? `Service "${addServiceStatus.name}" verified successfully and added.` : 'Service verified successfully and added.')
+                : addServiceStatus.error}
             </span>
           )}
         </form>

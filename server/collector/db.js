@@ -124,6 +124,9 @@ async function initTablesIfConnected() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         acknowledged_at TIMESTAMP NULL,
+        acknowledged_by_id VARCHAR(100) NULL,
+        acknowledged_by_name VARCHAR(255) NULL,
+        acknowledged_by_email VARCHAR(255) NULL,
         resolved_at TIMESTAMP NULL,
         read_at TIMESTAMP NULL,
         INDEX idx_alert_status (status),
@@ -136,6 +139,15 @@ async function initTablesIfConnected() {
     } catch { /* column already exists */ }
     try {
       await pool.query('ALTER TABLE alerts ADD COLUMN read_at TIMESTAMP NULL');
+    } catch { /* column already exists */ }
+    try {
+      await pool.query('ALTER TABLE alerts ADD COLUMN acknowledged_by_id VARCHAR(100) NULL');
+    } catch { /* column already exists */ }
+    try {
+      await pool.query('ALTER TABLE alerts ADD COLUMN acknowledged_by_name VARCHAR(255) NULL');
+    } catch { /* column already exists */ }
+    try {
+      await pool.query('ALTER TABLE alerts ADD COLUMN acknowledged_by_email VARCHAR(255) NULL');
     } catch { /* column already exists */ }
 
     // 6. Logs
@@ -314,16 +326,61 @@ async function insertService(name, url, kind) {
   return service;
 }
 
-async function serviceUrlExists(url) {
+async function serviceUrlExists(url, excludeId = null) {
   if (await ensureDb()) {
     try {
-      const [rows] = await pool.query('SELECT id FROM services WHERE url = ?', [url]);
+      let query = 'SELECT id FROM services WHERE url = ?';
+      const params = [url];
+      if (excludeId) {
+        query += ' AND id != ?';
+        params.push(Number(excludeId));
+      }
+      const [rows] = await pool.query(query, params);
       return rows.length > 0;
     } catch {
       useMemoryStore = true;
     }
   }
-  return memServices.some((s) => s.url === url);
+  return memServices.some((s) => s.url === url && (excludeId ? s.id !== Number(excludeId) : true));
+}
+
+async function updateService(id, { name, url, kind }) {
+  const numericId = Number(id);
+  if (!numericId) return null;
+
+  if (await ensureDb()) {
+    try {
+      const updates = [];
+      const values = [];
+      if (name !== undefined) { updates.push('name = ?'); values.push(name); }
+      if (url !== undefined) { updates.push('url = ?'); values.push(url); }
+      if (kind !== undefined) { updates.push('kind = ?'); values.push(kind); }
+      if (updates.length > 0) {
+        values.push(numericId);
+        await pool.query(`UPDATE services SET ${updates.join(', ')} WHERE id = ?`, values);
+      }
+      const [rows] = await pool.query('SELECT id, name, url, kind FROM services WHERE id = ?', [numericId]);
+      if (rows.length > 0) {
+        const updated = rows[0];
+        const idx = memServices.findIndex((s) => s.id === numericId);
+        if (idx !== -1) memServices[idx] = updated;
+        else memServices.push(updated);
+        return updated;
+      }
+    } catch (err) {
+      console.warn('[collector] MySQL updateService failed, updating memory store:', err.message);
+      useMemoryStore = true;
+    }
+  }
+
+  const idx = memServices.findIndex((s) => s.id === numericId);
+  if (idx !== -1) {
+    if (name !== undefined) memServices[idx].name = name;
+    if (url !== undefined) memServices[idx].url = url;
+    if (kind !== undefined) memServices[idx].kind = kind;
+    return memServices[idx];
+  }
+  return null;
 }
 
 async function getServiceDetails(serviceId) {
@@ -349,7 +406,7 @@ async function getServiceDetails(serviceId) {
         readings = readingRows;
 
         const [alertRows] = await pool.query(
-          'SELECT id, severity, status, message, alert_type, created_at FROM alerts WHERE service_id = ? OR service_name = ? ORDER BY created_at DESC LIMIT 10',
+          'SELECT id, service_id, service_name, severity, status, message, alert_type, created_at, acknowledged_at, acknowledged_by_id, acknowledged_by_name, acknowledged_by_email, resolved_at FROM alerts WHERE service_id = ? OR service_name = ? ORDER BY created_at DESC LIMIT 10',
           [numericId, service.name]
         );
         alerts = alertRows;
@@ -522,10 +579,14 @@ async function getServiceDetails(serviceId) {
     })),
     recentAlerts: alerts.map((a) => ({
       id: a.id,
-      time: new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      time: new Date(a.created_at || a.rawTimestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       severity: a.severity,
       message: a.message,
       status: a.status,
+      acknowledgedAt: a.acknowledged_at || a.acknowledgedAt || null,
+      acknowledgedById: a.acknowledged_by_id || a.acknowledgedById || null,
+      acknowledgedByName: a.acknowledged_by_name || a.acknowledgedByName || null,
+      acknowledgedBy: a.acknowledged_by_name || a.acknowledgedByName || (a.status === 'Acknowledged' ? 'User' : null),
     })),
     dependencies,
   };
@@ -808,6 +869,39 @@ async function getLogs({ level, service, search, limit = 100 }) {
 
 // --- Alerts Engine Persistence ---
 
+function mapAlertRow(row) {
+  if (!row) return null;
+  const createdAt = row.created_at ? new Date(row.created_at) : new Date();
+  const ackAt = row.acknowledged_at ? new Date(row.acknowledged_at) : null;
+  const resAt = row.resolved_at ? new Date(row.resolved_at) : null;
+  const readAt = row.read_at ? new Date(row.read_at) : null;
+
+  const ackById = row.acknowledged_by_id || null;
+  const ackByName = row.acknowledged_by_name || null;
+  const ackByEmail = row.acknowledged_by_email || null;
+  const ackBy = ackByName || ackByEmail || (row.status === 'Acknowledged' ? 'User' : null);
+
+  return {
+    id: row.id,
+    serviceId: row.service_id ?? row.serviceId ?? null,
+    service: row.service_name || row.service || 'System',
+    severity: row.severity,
+    status: row.status,
+    isRead: Boolean(row.is_read || row.isRead),
+    readAt: readAt ? readAt.toISOString() : null,
+    message: row.message,
+    alertType: row.alert_type || row.alertType || '',
+    time: createdAt.toLocaleString(),
+    rawTimestamp: createdAt.toISOString(),
+    acknowledgedAt: ackAt ? ackAt.toISOString() : null,
+    acknowledgedById: ackById,
+    acknowledgedByName: ackByName,
+    acknowledgedByEmail: ackByEmail,
+    acknowledgedBy: ackBy,
+    resolvedAt: resAt ? resAt.toISOString() : null,
+  };
+}
+
 async function createAlert({ serviceId, serviceName, severity = 'Warning', message, alertType }) {
   const alert = {
     id: nextAlertId++,
@@ -821,6 +915,9 @@ async function createAlert({ serviceId, serviceName, severity = 'Warning', messa
     created_at: new Date(),
     updated_at: new Date(),
     acknowledged_at: null,
+    acknowledged_by_id: null,
+    acknowledged_by_name: null,
+    acknowledged_by_email: null,
     resolved_at: null,
     read_at: null,
   };
@@ -837,26 +934,12 @@ async function createAlert({ serviceId, serviceName, severity = 'Warning', messa
         [alert.service_id, alert.service_name, alert.severity, alert.status, false, alert.message, alert.alert_type]
       );
       alert.id = res.insertId;
-    } catch (err) {
+    } catch {
       useMemoryStore = true;
     }
   }
 
-  return {
-    id: alert.id,
-    serviceId: alert.service_id,
-    service: alert.service_name,
-    severity: alert.severity,
-    status: alert.status,
-    isRead: false,
-    message: alert.message,
-    alertType: alert.alert_type,
-    time: new Date(alert.created_at).toLocaleString(),
-    rawTimestamp: alert.created_at,
-    acknowledgedAt: alert.acknowledged_at,
-    resolvedAt: alert.resolved_at,
-    readAt: null,
-  };
+  return mapAlertRow(alert);
 }
 
 async function getActiveAlertByServiceAndType(serviceId, alertType) {
@@ -867,7 +950,7 @@ async function getActiveAlertByServiceAndType(serviceId, alertType) {
         [serviceId, alertType]
       );
       return rows[0] || null;
-    } catch (err) {
+    } catch {
       useMemoryStore = true;
     }
   }
@@ -898,7 +981,7 @@ async function resolveActiveAlertsForService(serviceId, alertType) {
       }
       const [res] = await pool.query(q, params);
       resolvedCount = Math.max(resolvedCount, res.affectedRows || 0);
-    } catch (err) {
+    } catch {
       useMemoryStore = true;
     }
   }
@@ -906,57 +989,59 @@ async function resolveActiveAlertsForService(serviceId, alertType) {
   return resolvedCount;
 }
 
-async function acknowledgeAlert(id) {
+async function acknowledgeAlert(id, user = {}) {
   const numericId = Number(id);
   const now = new Date();
 
+  const ackUserId = (user && (user.id || user.email)) ? String(user.id || user.email) : 'system';
+  const ackUserName = (user && (user.name || user.email)) ? String(user.name || user.email) : 'System';
+  const ackUserEmail = (user && user.email) ? String(user.email) : '';
+
   const memAlert = memAlerts.find(a => a.id === numericId);
   if (memAlert) {
+    if (memAlert.status === 'Acknowledged' && memAlert.acknowledged_by_name) {
+      // Already acknowledged; do not overwrite original acknowledging user
+      return mapAlertRow(memAlert);
+    }
     memAlert.status = 'Acknowledged';
-    memAlert.acknowledged_at = now;
+    memAlert.acknowledged_at = memAlert.acknowledged_at || now;
+    memAlert.acknowledged_by_id = memAlert.acknowledged_by_id || ackUserId;
+    memAlert.acknowledged_by_name = memAlert.acknowledged_by_name || ackUserName;
+    memAlert.acknowledged_by_email = memAlert.acknowledged_by_email || ackUserEmail;
     memAlert.updated_at = now;
   }
 
   if (await ensureDb()) {
     try {
-      const [res] = await pool.query(
-        'UPDATE alerts SET status = "Acknowledged", acknowledged_at = NOW(), updated_at = NOW() WHERE id = ?',
-        [numericId]
-      );
-      if (res.affectedRows > 0) {
-        const [rows] = await pool.query('SELECT * FROM alerts WHERE id = ?', [numericId]);
-        if (rows[0]) {
-          return {
-            id: rows[0].id,
-            serviceId: rows[0].service_id,
-            service: rows[0].service_name,
-            severity: rows[0].severity,
-            status: rows[0].status,
-            message: rows[0].message,
-            alertType: rows[0].alert_type,
-            time: new Date(rows[0].created_at).toLocaleString(),
-            acknowledgedAt: rows[0].acknowledged_at,
-            resolvedAt: rows[0].resolved_at,
-          };
-        }
+      const [existingRows] = await pool.query('SELECT * FROM alerts WHERE id = ?', [numericId]);
+      if (existingRows.length === 0) {
+        return null;
       }
-    } catch (err) {
+      const existing = existingRows[0];
+      if (existing.status === 'Acknowledged' && existing.acknowledged_by_name) {
+        // Already acknowledged; do not overwrite original acknowledging user
+        return mapAlertRow(existing);
+      }
+
+      const finalAckId = existing.acknowledged_by_id || ackUserId;
+      const finalAckName = existing.acknowledged_by_name || ackUserName;
+      const finalAckEmail = existing.acknowledged_by_email || ackUserEmail;
+
+      await pool.query(
+        'UPDATE alerts SET status = "Acknowledged", acknowledged_at = COALESCE(acknowledged_at, NOW()), acknowledged_by_id = ?, acknowledged_by_name = ?, acknowledged_by_email = ?, updated_at = NOW() WHERE id = ?',
+        [finalAckId, finalAckName, finalAckEmail, numericId]
+      );
+
+      const [rows] = await pool.query('SELECT * FROM alerts WHERE id = ?', [numericId]);
+      if (rows[0]) {
+        return mapAlertRow(rows[0]);
+      }
+    } catch {
       useMemoryStore = true;
     }
   }
 
-  return memAlert ? {
-    id: memAlert.id,
-    serviceId: memAlert.service_id,
-    service: memAlert.service_name,
-    severity: memAlert.severity,
-    status: memAlert.status,
-    message: memAlert.message,
-    alertType: memAlert.alert_type,
-    time: new Date(memAlert.created_at).toLocaleString(),
-    acknowledgedAt: memAlert.acknowledged_at,
-    resolvedAt: memAlert.resolved_at,
-  } : null;
+  return memAlert ? mapAlertRow(memAlert) : null;
 }
 
 async function markAlertRead(id) {
@@ -979,41 +1064,15 @@ async function markAlertRead(id) {
       if (res.affectedRows > 0) {
         const [rows] = await pool.query('SELECT * FROM alerts WHERE id = ?', [numericId]);
         if (rows[0]) {
-          return {
-            id: rows[0].id,
-            serviceId: rows[0].service_id,
-            service: rows[0].service_name,
-            severity: rows[0].severity,
-            status: rows[0].status,
-            isRead: true,
-            readAt: rows[0].read_at,
-            message: rows[0].message,
-            alertType: rows[0].alert_type,
-            time: new Date(rows[0].created_at).toLocaleString(),
-            acknowledgedAt: rows[0].acknowledged_at,
-            resolvedAt: rows[0].resolved_at,
-          };
+          return mapAlertRow(rows[0]);
         }
       }
-    } catch (err) {
+    } catch {
       useMemoryStore = true;
     }
   }
 
-  return memAlert ? {
-    id: memAlert.id,
-    serviceId: memAlert.service_id,
-    service: memAlert.service_name,
-    severity: memAlert.severity,
-    status: memAlert.status,
-    isRead: true,
-    readAt: memAlert.read_at,
-    message: memAlert.message,
-    alertType: memAlert.alert_type,
-    time: new Date(memAlert.created_at).toLocaleString(),
-    acknowledgedAt: memAlert.acknowledged_at,
-    resolvedAt: memAlert.resolved_at,
-  } : null;
+  return memAlert ? mapAlertRow(memAlert) : null;
 }
 
 async function markAllAlertsRead() {
@@ -1035,7 +1094,7 @@ async function markAllAlertsRead() {
         'UPDATE alerts SET is_read = TRUE, read_at = NOW(), updated_at = NOW() WHERE is_read = FALSE OR is_read = 0'
       );
       count = Math.max(count, res.affectedRows || 0);
-    } catch (err) {
+    } catch {
       useMemoryStore = true;
     }
   }
@@ -1063,41 +1122,15 @@ async function resolveAlert(id) {
       if (res.affectedRows > 0) {
         const [rows] = await pool.query('SELECT * FROM alerts WHERE id = ?', [numericId]);
         if (rows[0]) {
-          return {
-            id: rows[0].id,
-            serviceId: rows[0].service_id,
-            service: rows[0].service_name,
-            severity: rows[0].severity,
-            status: rows[0].status,
-            isRead: Boolean(rows[0].is_read),
-            readAt: rows[0].read_at,
-            message: rows[0].message,
-            alertType: rows[0].alert_type,
-            time: new Date(rows[0].created_at).toLocaleString(),
-            acknowledgedAt: rows[0].acknowledged_at,
-            resolvedAt: rows[0].resolved_at,
-          };
+          return mapAlertRow(rows[0]);
         }
       }
-    } catch (err) {
+    } catch {
       useMemoryStore = true;
     }
   }
 
-  return memAlert ? {
-    id: memAlert.id,
-    serviceId: memAlert.service_id,
-    service: memAlert.service_name,
-    severity: memAlert.severity,
-    status: memAlert.status,
-    isRead: Boolean(memAlert.is_read),
-    readAt: memAlert.read_at,
-    message: memAlert.message,
-    alertType: memAlert.alert_type,
-    time: new Date(memAlert.created_at).toLocaleString(),
-    acknowledgedAt: memAlert.acknowledged_at,
-    resolvedAt: memAlert.resolved_at,
-  } : null;
+  return memAlert ? mapAlertRow(memAlert) : null;
 }
 
 async function getAlerts({ status, severity, search, limit = 50 }) {
@@ -1105,7 +1138,7 @@ async function getAlerts({ status, severity, search, limit = 50 }) {
 
   if (await ensureDb()) {
     try {
-      let q = 'SELECT id, service_id, service_name, severity, status, is_read, read_at, message, alert_type, created_at, acknowledged_at, resolved_at FROM alerts WHERE 1=1';
+      let q = 'SELECT id, service_id, service_name, severity, status, is_read, read_at, message, alert_type, created_at, acknowledged_at, acknowledged_by_id, acknowledged_by_name, acknowledged_by_email, resolved_at FROM alerts WHERE 1=1';
       const params = [];
 
       if (status && status !== 'All') {
@@ -1126,22 +1159,8 @@ async function getAlerts({ status, severity, search, limit = 50 }) {
       params.push(maxLimit);
 
       const [rows] = await pool.query(q, params);
-      return rows.map(r => ({
-        id: r.id,
-        serviceId: r.service_id,
-        service: r.service_name,
-        severity: r.severity,
-        status: r.status,
-        isRead: Boolean(r.is_read),
-        readAt: r.read_at,
-        message: r.message,
-        alertType: r.alert_type,
-        time: new Date(r.created_at).toLocaleString(),
-        rawTimestamp: r.created_at,
-        acknowledgedAt: r.acknowledged_at,
-        resolvedAt: r.resolved_at,
-      }));
-    } catch (err) {
+      return rows.map(mapAlertRow);
+    } catch {
       useMemoryStore = true;
     }
   }
@@ -1158,21 +1177,7 @@ async function getAlerts({ status, severity, search, limit = 50 }) {
     list = list.filter(a => (a.message && a.message.toLowerCase().includes(q)) || (a.service_name && a.service_name.toLowerCase().includes(q)));
   }
 
-  return list.slice(0, maxLimit).map(r => ({
-    id: r.id,
-    serviceId: r.service_id,
-    service: r.service_name,
-    severity: r.severity,
-    status: r.status,
-    isRead: Boolean(r.is_read),
-    readAt: r.read_at,
-    message: r.message,
-    alertType: r.alert_type,
-    time: new Date(r.created_at).toLocaleString(),
-    rawTimestamp: r.created_at,
-    acknowledgedAt: r.acknowledged_at,
-    resolvedAt: r.resolved_at,
-  }));
+  return list.slice(0, maxLimit).map(mapAlertRow);
 }
 
 async function getAlertsSummary() {
@@ -1578,6 +1583,7 @@ module.exports = {
   searchAll,
   getAllServices,
   insertService,
+  updateService,
   deleteService,
   serviceUrlExists,
   getServiceDetails,

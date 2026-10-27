@@ -26,8 +26,10 @@ async function apiFetch(endpoint, options = {}) {
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 10000);
 
   try {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
     const headers = {
       'Accept': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     };
     if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {

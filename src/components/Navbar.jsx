@@ -661,8 +661,14 @@ const Navbar = ({ collapsed, onMobileMenuOpen, onAlertsCountChange }) => {
                             {n.status}
                           </span>
                         </div>
-                        <div className="notification-item-msg">{n.message}</div>
-                        <div className="notification-item-time">{n.time}</div>
+                        <div className="notification-item-time">
+                          {n.time}
+                          {n.status === 'Acknowledged' && (n.acknowledgedByName || n.acknowledgedBy) && (
+                            <span style={{ marginLeft: 6, color: 'var(--accent-primary)', fontWeight: 600 }}>
+                              · Ack by {n.acknowledgedByName || n.acknowledgedBy}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))

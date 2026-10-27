@@ -68,9 +68,17 @@ const Alerts = () => {
     return () => clearInterval(interval);
   }, [loadAlertsData]);
 
-  // Synchronize immediately on cross-component alert events (e.g. mark all read in Navbar)
+  // Synchronize immediately on cross-component alert events (e.g. mark all read in Navbar or WebSocket broadcast)
   useEffect(() => {
-    const handleUpdate = () => loadAlertsData(false);
+    const handleUpdate = (e) => {
+      if (e?.detail?.alert) {
+        const updated = e.detail.alert;
+        setAlerts((prev) =>
+          prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a))
+        );
+      }
+      loadAlertsData(false);
+    };
     window.addEventListener('alert_updated', handleUpdate);
     return () => window.removeEventListener('alert_updated', handleUpdate);
   }, [loadAlertsData]);
@@ -79,17 +87,18 @@ const Alerts = () => {
     setActionPending((prev) => ({ ...prev, [id]: true }));
     try {
       const res = await acknowledgeAlert(id);
-      if (res && res.ok) {
+      if (res && res.ok && res.alert) {
         setAlerts((prev) =>
-          prev.map((a) => (a.id === id ? { ...a, status: 'Acknowledged' } : a))
+          prev.map((a) => (a.id === id ? { ...a, ...res.alert, status: 'Acknowledged' } : a))
         );
         setSummary((prev) => ({
           ...prev,
           active: Math.max(0, prev.active - 1),
           acknowledged: prev.acknowledged + 1,
         }));
-        window.dispatchEvent(new CustomEvent('alert_updated'));
-        toast.success(`Alert #${id} acknowledged`, {
+        window.dispatchEvent(new CustomEvent('alert_updated', { detail: { alert: res.alert } }));
+        const ackUser = res.alert.acknowledgedByName || res.alert.acknowledgedBy || 'User';
+        toast.success(`Alert #${id} acknowledged by ${ackUser}`, {
           style: {
             background: 'var(--bg-card)',
             color: 'var(--text-primary)',
@@ -337,9 +346,29 @@ const Alerts = () => {
                       {alert.time}
                     </td>
                     <td>
-                      <span className={`alert-status-badge ${alert.status ? alert.status.toLowerCase() : 'active'}`}>
-                        {alert.status}
-                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span className={`alert-status-badge ${alert.status ? alert.status.toLowerCase() : 'active'}`}>
+                          {alert.status}
+                        </span>
+                        {alert.status === 'Acknowledged' && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
+                            <span>Acknowledged by </span>
+                            <strong style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>
+                              {alert.acknowledgedByName || alert.acknowledgedBy || 'User'}
+                            </strong>
+                            {alert.acknowledgedAt && (
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 1 }}>
+                                {new Date(alert.acknowledgedAt).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {alert.status === 'Resolved' && (alert.acknowledgedByName || alert.acknowledgedBy) && (
+                          <div style={{ fontSize: '0.70rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
+                            Ack by {alert.acknowledgedByName || alert.acknowledgedBy}
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td>
                       {alert.status === 'Active' ? (
